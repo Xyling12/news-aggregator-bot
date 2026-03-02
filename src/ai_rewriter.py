@@ -31,6 +31,8 @@ REWRITE_PROMPT = """Ты — профессиональный рерайтер �
 6. НЕ добавлять своих комментариев или оценок
 7. НЕ упоминать источник оригинальной новости
 8. Написать новый заголовок (первая строка)
+9. УДАЛИТЬ любые ссылки, упоминания исходного канала, "подписаться", "повестка дня — на сайте"
+10. УДАЛИТЬ рекламные блоки и ссылки на сторонние сайты
 
 Формат ответа:
 Первая строка — заголовок (жирным не выделять)
@@ -148,39 +150,54 @@ class AIRewriter:
         return None, "error"
 
     async def _rewrite_with_gemini(self, text: str) -> Optional[str]:
-        """Rewrite text using Google Gemini."""
-        try:
-            prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+        """Rewrite text using Google Gemini with retry on rate limit."""
+        max_retries = 3
+        delays = [5, 15, 30]  # seconds between retries
 
-            # Run sync Gemini call in executor to avoid blocking
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self._gemini_model.generate_content(
-                    prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.7,
-                        max_output_tokens=2048,
+        for attempt in range(max_retries):
+            try:
+                prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+
+                # Run sync Gemini call in executor to avoid blocking
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._gemini_model.generate_content(
+                        prompt,
+                        generation_config=genai.GenerationConfig(
+                            temperature=0.7,
+                            max_output_tokens=2048,
+                        ),
                     ),
-                ),
-            )
+                )
 
-            if response and response.text:
-                rewritten = response.text.strip()
-                # Basic quality check
-                if len(rewritten) > 50 and rewritten != text:
-                    logger.info(f"Gemini rewrite successful ({len(text)} -> {len(rewritten)} chars)")
-                    return rewritten
+                if response and response.text:
+                    rewritten = response.text.strip()
+                    # Basic quality check
+                    if len(rewritten) > 50 and rewritten != text:
+                        logger.info(f"Gemini rewrite successful ({len(text)} -> {len(rewritten)} chars)")
+                        return rewritten
+                    else:
+                        logger.warning("Gemini returned too short or identical text")
+                        return None
                 else:
-                    logger.warning("Gemini returned too short or identical text")
+                    logger.warning("Gemini returned empty response")
                     return None
-            else:
-                logger.warning("Gemini returned empty response")
-                return None
 
-        except Exception as e:
-            logger.error(f"Gemini rewrite failed: {e}")
-            return None
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str or "resource" in error_str
+
+                if is_rate_limit and attempt < max_retries - 1:
+                    delay = delays[attempt]
+                    logger.warning(f"Gemini rate limit (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Gemini rewrite failed: {e}")
+                    return None
+
+        return None
 
     async def _rewrite_with_retext(self, text: str) -> Optional[str]:
         """Rewrite text using ReText.AI API (fallback)."""

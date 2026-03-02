@@ -159,6 +159,7 @@ class ChannelMonitor:
 
                 if self._on_new_post_callback:
                     await self._on_new_post_callback(post_id)
+                    await asyncio.sleep(3)  # Delay between posts to avoid AI rate limits
 
                 logger.info(f"Post #{post_id} from @{channel_username}: {text[:80]}...")
 

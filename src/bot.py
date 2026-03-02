@@ -550,6 +550,44 @@ def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _clean_text(text: str) -> str:
+    """Remove source attribution lines, subscribe links, and external URLs from post text."""
+    import re
+    lines = text.split('\n')
+    cleaned = []
+    skip_patterns = [
+        r'подписаться на',
+        r'подписывайтесь',
+        r'повестка дня.*на сайте',
+        r'читайте.*на сайте',
+        r'источник:',
+        r'подробнее.*на сайте',
+        r'на нашем сайте',
+        r'наш.*канал',
+        r'присоединяйтесь',
+        r'подробности.*по ссылке',
+        r'ранее.*писал[аи]?',
+        r'^\s*https?://',  # standalone URLs
+        r'^\s*t\.me/',
+        r'^\s*@\w+\s*$',  # standalone @mentions (channel links)
+    ]
+    for line in lines:
+        line_lower = line.strip().lower()
+        if not line_lower:
+            cleaned.append(line)
+            continue
+        skip = False
+        for pattern in skip_patterns:
+            if re.search(pattern, line_lower):
+                skip = True
+                break
+        if not skip:
+            cleaned.append(line)
+    # Remove trailing empty lines
+    result = '\n'.join(cleaned).rstrip()
+    return result
+
+
 async def _send_review_post(chat_id: int, post: dict):
     """Send a post for admin review with moderation buttons."""
     original = _escape_html(_truncate(post["original_text"], 300))
@@ -674,7 +712,7 @@ async def process_new_post(post_id: int):
         return
 
     logger.info(f"Processing new post #{post_id}")
-    original_text = post["original_text"]
+    original_text = _clean_text(post["original_text"])
     text_lower = original_text.lower()
 
     # Step 0a: Ad filter — skip promotional posts
@@ -722,6 +760,7 @@ async def process_new_post(post_id: int):
     rewritten, engine = await _rewriter.rewrite(original_text)
 
     if rewritten:
+        rewritten = _clean_text(rewritten)  # Clean AI output too
         uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
         logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
     else:
