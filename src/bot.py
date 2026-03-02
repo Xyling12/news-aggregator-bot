@@ -517,16 +517,24 @@ async def cb_rewrite(callback: CallbackQuery):
     if post:
         await _db.update_post_status(post_id, "rewriting")
 
-        rewritten, engine = await _rewriter.rewrite(post["original_text"])
+        # Clean original text before rewriting (same as pipeline)
+        clean_original = _clean_text(post["original_text"])
+        rewritten, engine = await _rewriter.rewrite(clean_original)
         if rewritten:
+            rewritten = _clean_text(rewritten)  # Clean AI output
+            # Generate hashtags and format
+            hashtags = await _rewriter.generate_hashtags(rewritten)
+            rewritten = _format_post(rewritten, hashtags)
+            
             await _db.update_post_rewrite(post_id, rewritten)
-            uniqueness = _rewriter.calculate_uniqueness(post["original_text"], rewritten)
+            uniqueness = _rewriter.calculate_uniqueness(clean_original, rewritten)
 
             updated_post = await _db.get_post(post_id)
             await callback.message.reply(f"✅ Перерайт завершён (движок: {engine}, уникальность: {uniqueness:.0%})")
             await _send_review_post(callback.message.chat.id, updated_post)
         else:
-            await callback.message.reply("❌ Рерайт не удался. Попробуйте позже.")
+            logger.error(f"Post #{post_id}: manual rewrite failed - Gemini returned None")
+            await callback.message.reply("❌ Рерайт не удался. Gemini API может быть недоступен.")
             await _db.update_post_status(post_id, "review")
 
 
