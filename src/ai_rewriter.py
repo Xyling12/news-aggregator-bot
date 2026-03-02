@@ -188,7 +188,12 @@ class AIRewriter:
 
         for attempt in range(max_retries):
             try:
-                prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+                # On retry after low uniqueness, use stronger instruction
+                if attempt > 0:
+                    extra = "\n\n⚠️ ПРЕДУПРЕЖДЕНИЕ: Предыдущий рерайт был СЛИШКОМ ПОХОЖ на оригинал. ПОЛНОСТЬЮ ПЕРЕПИШИ КАЖДОЕ ПРЕДЛОЖЕНИЕ. Используй ДРУГИЕ слова, ДРУГУЮ структуру, ДРУГОЙ порядок фактов."
+                    prompt = (REWRITE_PROMPT + extra).format(text=text)
+                else:
+                    prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
 
                 # Run sync Gemini call in executor to avoid blocking
                 loop = asyncio.get_event_loop()
@@ -197,7 +202,7 @@ class AIRewriter:
                     lambda: self._gemini_model.generate_content(
                         prompt,
                         generation_config=genai.GenerationConfig(
-                            temperature=0.8,
+                            temperature=0.9,
                             max_output_tokens=2048,
                         ),
                         safety_settings=SAFETY_SETTINGS,
@@ -206,15 +211,28 @@ class AIRewriter:
 
                 if response and response.text:
                     rewritten = response.text.strip()
-                    # Basic quality check
+                    # Quality check: length + uniqueness
                     if len(rewritten) > 50 and rewritten != text:
-                        logger.info(f"Gemini rewrite successful ({len(text)} -> {len(rewritten)} chars)")
-                        return rewritten
+                        uniqueness = self.calculate_uniqueness(text, rewritten)
+                        logger.info(f"Gemini attempt {attempt+1}: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
+                        
+                        if uniqueness >= 0.4:  # 40%+ uniqueness = OK
+                            return rewritten
+                        else:
+                            logger.warning(f"Gemini rewrite too similar ({uniqueness:.0%}), retrying...")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(2)
+                                continue
+                            else:
+                                logger.warning("All retries exhausted with low uniqueness, using last result")
+                                return rewritten
                     else:
                         logger.warning("Gemini returned too short or identical text")
                         return None
                 else:
-                    logger.warning("Gemini returned empty response")
+                    logger.warning(f"Gemini returned empty response (attempt {attempt+1})")
+                    if response:
+                        logger.warning(f"Response candidates: {response.candidates if hasattr(response, 'candidates') else 'none'}")
                     return None
 
             except Exception as e:
