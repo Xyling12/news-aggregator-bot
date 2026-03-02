@@ -131,23 +131,25 @@ class ChannelMonitor:
 
             # Determine media type from HTML
             media_type = post.get("media_type", "none")
+            media_url = post.get("media_url")
             media_local_path = None
 
             # Download photo if available
-            if media_type == "photo" and post.get("media_url"):
+            if media_type == "photo" and media_url:
                 try:
                     media_local_path = await self._download_media(
-                        post["media_url"], channel_username, msg_id
+                        media_url, channel_username, msg_id
                     )
                 except Exception as e:
                     logger.error(f"Media download failed: {e}")
 
-            # Save to database
+            # Save to database (store remote URL in media_file_id for fallback)
             post_id = await self.db.add_post(
                 source_channel=channel_username,
                 source_message_id=msg_id,
                 original_text=text,
                 media_type=media_type,
+                media_file_id=media_url,  # Store remote URL for fallback
                 media_local_path=media_local_path,
             )
 

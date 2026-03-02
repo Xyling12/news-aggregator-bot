@@ -574,19 +574,27 @@ async def _send_review_post(chat_id: int, post: dict):
 
     # If post has media, send with media
     media_path = post.get("media_local_path")
-    if media_path and os.path.exists(media_path) and post["media_type"] == "photo":
-        try:
-            photo = FSInputFile(media_path)
-            await _bot.send_photo(
-                chat_id,
-                photo=photo,
-                caption=text[:1024],
-                reply_markup=get_review_keyboard(post["id"]),
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        except Exception as e:
-            logger.error(f"Failed to send media: {e}")
+    media_url = post.get("media_file_id")  # Remote URL fallback
+
+    if post["media_type"] == "photo":
+        photo_source = None
+        if media_path and os.path.exists(media_path):
+            photo_source = FSInputFile(media_path)
+        elif media_url:
+            photo_source = media_url
+
+        if photo_source:
+            try:
+                await _bot.send_photo(
+                    chat_id,
+                    photo=photo_source,
+                    caption=text[:1024],
+                    reply_markup=get_review_keyboard(post["id"]),
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            except Exception as e:
+                logger.error(f"Failed to send media: {e}")
 
     # Send text only
     await _bot.send_message(
@@ -607,6 +615,7 @@ async def _publish_post(post: dict) -> bool:
 
     try:
         media_path = post.get("media_local_path")
+        media_url = post.get("media_file_id")  # Remote URL fallback
         replacement_url = post.get("replacement_media_url")
 
         # Use replacement photo if available
@@ -617,14 +626,26 @@ async def _publish_post(post: dict) -> bool:
                 caption=text[:1024],
                 parse_mode=ParseMode.HTML,
             )
-        elif media_path and os.path.exists(media_path) and post["media_type"] == "photo":
-            photo = FSInputFile(media_path)
-            msg = await _bot.send_photo(
-                target,
-                photo=photo,
-                caption=text[:1024],
-                parse_mode=ParseMode.HTML,
-            )
+        elif post["media_type"] == "photo":
+            photo_source = None
+            if media_path and os.path.exists(media_path):
+                photo_source = FSInputFile(media_path)
+            elif media_url:
+                photo_source = media_url
+
+            if photo_source:
+                msg = await _bot.send_photo(
+                    target,
+                    photo=photo_source,
+                    caption=text[:1024],
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                msg = await _bot.send_message(
+                    target,
+                    text[:4096],
+                    parse_mode=ParseMode.HTML,
+                )
         else:
             msg = await _bot.send_message(
                 target,
