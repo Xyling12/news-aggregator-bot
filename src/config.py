@@ -37,6 +37,10 @@ class Config:
     # Optional: Unsplash API
     unsplash_access_key: str = ""
 
+    # Optional: YandexGPT API
+    yandex_api_key: str = ""
+    yandex_folder_id: str = ""
+
     # Optional: ReText.AI API
     retext_api_key: str = ""
 
@@ -97,6 +101,8 @@ class Config:
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             source_channels=source_channels,
             unsplash_access_key=os.getenv("UNSPLASH_ACCESS_KEY", ""),
+            yandex_api_key=os.getenv("YANDEX_API_KEY", ""),
+            yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
             retext_api_key=os.getenv("RETEXT_API_KEY", ""),
             min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "100")),
             check_interval=int(os.getenv("CHECK_INTERVAL", "60")),

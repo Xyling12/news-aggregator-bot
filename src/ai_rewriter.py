@@ -189,7 +189,7 @@ class AIRewriter:
         Rewrite text using AI.
         
         Returns:
-            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'retext' | 'error')
+            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'yandexgpt' | 'retext' | 'error')
         """
         # Try Gemini first
         if self._gemini_model:
@@ -197,7 +197,13 @@ class AIRewriter:
             if result:
                 return result, "gemini"
 
-        # Fallback to ReText.AI
+        # Fallback to YandexGPT
+        if self.config.yandex_api_key and self.config.yandex_folder_id:
+            result = await self._rewrite_with_yandexgpt(original_text)
+            if result:
+                return result, "yandexgpt"
+
+        # Last resort: ReText.AI
         if self.config.retext_api_key:
             result = await self._rewrite_with_retext(original_text)
             if result:
@@ -274,7 +280,67 @@ class AIRewriter:
                     logger.error(f"Gemini [{model_name}] error: {e}")
                     return None
 
-        logger.error("All Gemini models exhausted (quota)")
+        logger.warning("All Gemini models exhausted (quota), falling back to YandexGPT...")
+        return None
+
+    async def _rewrite_with_yandexgpt(self, text: str) -> Optional[str]:
+        """Rewrite text using YandexGPT API (REST via aiohttp)."""
+        try:
+            url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+            headers = {
+                "Authorization": f"Api-Key {self.config.yandex_api_key}",
+                "Content-Type": "application/json",
+            }
+
+            # Use lite model for cost efficiency
+            model_uri = f"gpt://{self.config.yandex_folder_id}/yandexgpt-lite/latest"
+
+            prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+
+            body = {
+                "modelUri": model_uri,
+                "completionOptions": {
+                    "stream": False,
+                    "temperature": 0.9,
+                    "maxTokens": "2048",
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "text": "Ты — главный редактор популярного новостного Telegram-канала. Перепиши новость полностью своими словами.",
+                    },
+                    {
+                        "role": "user",
+                        "text": prompt,
+                    },
+                ],
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=body, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # YandexGPT response format
+                        result = data.get("result", {})
+                        alternatives = result.get("alternatives", [])
+                        if alternatives:
+                            rewritten = alternatives[0].get("message", {}).get("text", "").strip()
+                            if rewritten and len(rewritten) > 50 and rewritten != text:
+                                uniqueness = self.calculate_uniqueness(text, rewritten)
+                                logger.info(
+                                    f"YandexGPT: uniqueness {uniqueness:.0%} "
+                                    f"({len(text)} -> {len(rewritten)} chars)"
+                                )
+                                return rewritten
+                            else:
+                                logger.warning("YandexGPT: too short or identical")
+                    else:
+                        error = await resp.text()
+                        logger.error(f"YandexGPT returned {resp.status}: {error[:200]}")
+
+        except Exception as e:
+            logger.error(f"YandexGPT rewrite failed: {e}")
+
         return None
 
     async def _rewrite_with_retext(self, text: str) -> Optional[str]:

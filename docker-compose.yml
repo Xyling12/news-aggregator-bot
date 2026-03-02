@@ -12,6 +12,9 @@ services:
       - bot_media:/app/media
     env_file:
       - .env
+    environment:
+      - YANDEX_API_KEY=${YANDEX_API_KEY}
+      - YANDEX_FOLDER_ID=${YANDEX_FOLDER_ID}
     networks:
       - dokploy-network
 
