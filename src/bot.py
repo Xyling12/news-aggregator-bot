@@ -293,11 +293,35 @@ async def cb_sources(callback: CallbackQuery):
     """Sources button handler."""
     await callback.answer()
     sources = await _db.get_active_sources()
-    lines = ["📡 **Источники:**\n"] + [f"  • @{s['channel_username']}" for s in sources]
+    lines = ["📡 <b>Источники:</b>\n"] + [f"  • @{s['channel_username']}" for s in sources]
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить", callback_data="add_source")],
     ])
-    await callback.message.answer("\n".join(lines) or "Нет источников", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    await callback.message.answer("\n".join(lines) or "Нет источников", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data == "settings")
+async def cb_settings(callback: CallbackQuery):
+    """Settings button handler."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+    text = (
+        f"⚙️ <b>Настройки бота</b>\n\n"
+        f"📡 Источников: <b>{len(_config.source_channels)}</b>\n"
+        f"⏱ Интервал проверки: <b>{_config.check_interval} сек</b>\n"
+        f"📤 Интервал публикации: <b>{_config.publish_interval // 60} мин</b>\n"
+        f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n"
+        f"🗣 Язык: <b>{_config.language}</b>\n\n"
+        f"🚫 Фильтры:\n"
+        f"  • Реклама: <b>{len(_config.ad_stop_words)} слов</b>\n"
+        f"  • Политика: <b>{len(_config.politics_stop_words)} слов</b>\n"
+        f"  • Срочные новости: <b>{len(_config.breaking_keywords)} слов</b>\n\n"
+        f"📢 Канал: <b>@{_config.target_channel}</b>"
+    )
+    await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "add_source")
