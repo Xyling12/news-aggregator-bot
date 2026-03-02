@@ -714,9 +714,17 @@ async def _send_review_post(chat_id: int, post: dict):
     status = _status_emoji(post["status"])
     source = post["source_channel"]
 
+    # Format date as d.m.Y H:M
+    from datetime import datetime as dt
+    try:
+        created = dt.fromisoformat(str(post['created_at']))
+        date_str = created.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        date_str = str(post['created_at'])
+
     text = (
         f"{status} <b>Пост #{post['id']}</b> | Источник: @{source}\n"
-        f"📅 {post['created_at']}\n\n"
+        f"📅 {date_str}\n\n"
         f"📝 <b>Оригинал:</b>\n{original}\n\n"
         f"✍️ <b>Рерайт:</b>\n{rewritten_display}"
     )
@@ -868,11 +876,22 @@ async def process_new_post(post_id: int):
     for existing_text in recent_texts:
         if existing_text == original_text:
             continue
+        # Method 1: Text similarity (catches rewording of same text)
         similarity = 1.0 - _rewriter.calculate_uniqueness(original_text, existing_text)
-        if similarity > 0.6:
+        if similarity > 0.45:
             await _db.update_post_status(post_id, "rejected")
-            logger.info(f"Post #{post_id} rejected: duplicate (similarity {similarity:.0%})")
+            logger.info(f"Post #{post_id} rejected: duplicate text (similarity {similarity:.0%})")
             return
+        # Method 2: Keyword overlap (catches same story from different sources)
+        import re as _re
+        words1 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', original_text.lower()) if len(w) > 4)
+        words2 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', existing_text.lower()) if len(w) > 4)
+        if words1 and words2:
+            overlap = len(words1 & words2) / min(len(words1), len(words2))
+            if overlap > 0.6:
+                await _db.update_post_status(post_id, "rejected")
+                logger.info(f"Post #{post_id} rejected: duplicate topic (keyword overlap {overlap:.0%})")
+                return
 
     # Step 0d: Breaking news detection — auto-publish without moderation
     is_breaking = any(kw in text_lower for kw in _config.breaking_keywords)
