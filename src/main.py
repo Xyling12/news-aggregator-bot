@@ -72,16 +72,26 @@ async def main():
     # Register callback: when a new post is found, process it
     monitor.on_new_post(process_new_post)
 
-    try:
-        # Start Telethon client
-        await monitor.start()
-        logger.info("Channel monitor started")
+    publish_task = None
+    monitor_started = False
 
-        # Fetch recent posts from all sources (catch-up)
-        for channel in config.source_channels:
-            posts = await monitor.fetch_recent_posts(channel, limit=3)
-            if posts:
-                logger.info(f"Fetched {len(posts)} recent posts from @{channel}")
+    try:
+        # Try to start Telethon client (may fail if no session)
+        try:
+            await monitor.start()
+            monitor_started = True
+            logger.info("Channel monitor started")
+
+            # Fetch recent posts from all sources (catch-up)
+            for channel in config.source_channels:
+                posts = await monitor.fetch_recent_posts(channel, limit=3)
+                if posts:
+                    logger.info(f"Fetched {len(posts)} recent posts from @{channel}")
+        except Exception as e:
+            logger.warning(f"⚠️ Channel monitor failed to start: {e}")
+            logger.warning("Run: docker exec -it news-bot python -m src.init_session")
+            logger.warning("Then: docker restart news-bot")
+            logger.info("Bot will continue WITHOUT channel monitoring...")
 
         # Start auto-publish scheduler
         publish_task = asyncio.create_task(auto_publish_loop())
@@ -96,9 +106,10 @@ async def main():
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
-        if 'publish_task' in dir():
+        if publish_task:
             publish_task.cancel()
-        await monitor.stop()
+        if monitor_started:
+            await monitor.stop()
         await db.close()
         await bot.session.close()
         logger.info("Bot stopped. Goodbye!")
