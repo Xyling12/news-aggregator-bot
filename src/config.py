@@ -95,10 +95,6 @@ class Config:
     def validate(self) -> List[str]:
         """Validate that all required settings are present. Returns list of error messages."""
         errors = []
-        if not self.api_id:
-            errors.append("TELEGRAM_API_ID is required")
-        if not self.api_hash:
-            errors.append("TELEGRAM_API_HASH is required")
         if not self.bot_token:
             errors.append("BOT_TOKEN is required")
         if not self.target_channel:

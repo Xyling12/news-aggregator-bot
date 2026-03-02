@@ -7,7 +7,6 @@ import os
 from typing import Optional, List, Tuple
 
 import aiohttp
-import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,7 @@ class MediaProcessor:
         """
         try:
             import cv2
+            import numpy as np
 
             img = cv2.imread(image_path)
             if img is None:
