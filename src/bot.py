@@ -639,6 +639,13 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: ad/spam (matched: {', '.join(ad_matches[:3])})")
         return
 
+    # Step 0a2: Politics filter — skip political posts
+    politics_matches = [w for w in _config.politics_stop_words if w in text_lower]
+    if len(politics_matches) >= 2:  # 2+ political keywords = politics
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: politics (matched: {', '.join(politics_matches[:3])})")
+        return
+
     # Step 0b: Relevance filter for federal channels
     source = post["source_channel"].lower()
     local_keywords = ["izhevsk", "izh", "udm", "удмурт", "ижевск", "18"]
