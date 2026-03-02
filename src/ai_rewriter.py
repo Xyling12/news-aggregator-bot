@@ -8,7 +8,11 @@ import asyncio
 from typing import Optional, Tuple
 
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+try:
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+    _HAS_SAFETY = True
+except ImportError:
+    _HAS_SAFETY = False
 import aiohttp
 
 from src.config import Config
@@ -71,12 +75,15 @@ REWRITE_SHORT_PROMPT = """Ты — редактор Telegram-канала "Иж�
 {text}"""
 
 # Safety settings — allow all content (news about accidents/crime gets blocked otherwise)
-SAFETY_SETTINGS = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
+if _HAS_SAFETY:
+    SAFETY_SETTINGS = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+else:
+    SAFETY_SETTINGS = None
 
 # Prompt to check if news is of general interest (not region-specific)
 RELEVANCE_PROMPT = """Ты — редактор новостного канала для жителей Ижевска и Удмуртии.
