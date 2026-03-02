@@ -572,8 +572,8 @@ async def cb_rewrite(callback: CallbackQuery):
             await callback.message.reply(f"✅ Перерайт завершён (движок: {engine}, уникальность: {uniqueness:.0%})")
             await _send_review_post(callback.message.chat.id, updated_post)
         else:
-            logger.error(f"Post #{post_id}: manual rewrite failed - Gemini returned None")
-            await callback.message.reply("❌ Рерайт не удался. Gemini API может быть недоступен.")
+            logger.error(f"Post #{post_id}: manual rewrite failed - all AI engines returned None")
+            await callback.message.reply("❌ Рерайт не удался. Все AI-движки (Gemini/YandexGPT) недоступны.")
             await _db.update_post_status(post_id, "review")
 
 
