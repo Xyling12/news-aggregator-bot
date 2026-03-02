@@ -10,17 +10,8 @@ services:
     volumes:
       - bot_data:/app/data
       - bot_media:/app/media
-    environment:
-      - BOT_TOKEN=8523597327:AAHO0yYNm4RasEU0MKfBXBnCx538SAPhG8U
-      - TARGET_CHANNEL=IzhevskTodayNews
-      - ADMIN_IDS=376060133
-      - GEMINI_API_KEY=AIzaSyAG_Ud97y8hsxFQUJYghzQjLXW_B4-neDw
-      - SOURCE_CHANNELS=izhevsk_smi,izhevsktop1,udm_info,Izhlife_ru,susaninudm,kommersant18,rian_ru
-      - UNSPLASH_ACCESS_KEY=IM-qQbut_JlLKNAM-PtBvcbkxcMXir3AP53j79n9q4E
-      - MIN_TEXT_LENGTH=100
-      - CHECK_INTERVAL=60
-      - PUBLISH_INTERVAL=7200
-      - LANGUAGE=ru
+    env_file:
+      - .env
     networks:
       - dokploy-network
 
