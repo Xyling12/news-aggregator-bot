@@ -521,20 +521,25 @@ async def cb_dismiss(callback: CallbackQuery):
 
 # ── Helper Functions ─────────────────────────────────────────────────────
 
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters in text."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 async def _send_review_post(chat_id: int, post: dict):
     """Send a post for admin review with moderation buttons."""
-    original = _truncate(post["original_text"], 300)
+    original = _escape_html(_truncate(post["original_text"], 300))
     rewritten = post.get("rewritten_text") or "⏳ Ещё не переписан"
-    rewritten_display = _truncate(rewritten, 500)
+    rewritten_display = _escape_html(_truncate(rewritten, 500))
 
     status = _status_emoji(post["status"])
     source = post["source_channel"]
 
     text = (
-        f"{status} **Пост #{post['id']}** | Источник: @{source}\n"
+        f"{status} <b>Пост #{post['id']}</b> | Источник: @{source}\n"
         f"📅 {post['created_at']}\n\n"
-        f"📝 **Оригинал:**\n{original}\n\n"
-        f"✍️ **Рерайт:**\n{rewritten_display}"
+        f"📝 <b>Оригинал:</b>\n{original}\n\n"
+        f"✍️ <b>Рерайт:</b>\n{rewritten_display}"
     )
 
     # Add media info
@@ -553,7 +558,7 @@ async def _send_review_post(chat_id: int, post: dict):
                 photo=photo,
                 caption=text[:1024],
                 reply_markup=get_review_keyboard(post["id"]),
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
             return
         except Exception as e:
@@ -564,7 +569,7 @@ async def _send_review_post(chat_id: int, post: dict):
         chat_id,
         text[:4096],
         reply_markup=get_review_keyboard(post["id"]),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -586,7 +591,7 @@ async def _publish_post(post: dict) -> bool:
                 target,
                 photo=replacement_url,
                 caption=text[:1024],
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
         elif media_path and os.path.exists(media_path) and post["media_type"] == "photo":
             photo = FSInputFile(media_path)
@@ -594,13 +599,13 @@ async def _publish_post(post: dict) -> bool:
                 target,
                 photo=photo,
                 caption=text[:1024],
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
         else:
             msg = await _bot.send_message(
                 target,
                 text[:4096],
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
 
         # Record publication
@@ -698,9 +703,9 @@ async def process_new_post(post_id: int):
                 try:
                     await _bot.send_message(
                         admin_id,
-                        f"⚡ **СРОЧНАЯ НОВОСТЬ** автоматически опубликована!\n\n"
+                        f"⚡ <b>СРОЧНАЯ НОВОСТЬ</b> автоматически опубликована!\n\n"
                         f"Пост #{post_id} из @{post['source_channel']}",
-                        parse_mode=ParseMode.MARKDOWN,
+                        parse_mode=ParseMode.HTML,
                     )
                 except Exception:
                     pass
