@@ -270,6 +270,45 @@ async def cmd_help(message: Message):
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
 
+@router.message(Command("testgemini"))
+async def cmd_test_gemini(message: Message):
+    """Test Gemini API connectivity — admin only diagnostic."""
+    if not is_admin(message.from_user.id):
+        return
+
+    import traceback
+    lines = []
+    
+    # Check 1: API key
+    key = _config.gemini_api_key if _config else "NO CONFIG"
+    lines.append(f"🔑 API Key: {'SET (' + key[:10] + '...)' if key else '❌ NOT SET'}")
+    
+    # Check 2: Model
+    if _rewriter and _rewriter._gemini_model:
+        lines.append("🤖 Model: ✅ initialized")
+    else:
+        lines.append("🤖 Model: ❌ NOT initialized")
+    
+    # Check 3: Try actual API call
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=_config.gemini_api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = model.generate_content("Скажи одно слово: привет")
+        if response and response.text:
+            lines.append(f"📡 API Call: ✅ OK — '{response.text.strip()[:50]}'")
+        else:
+            lines.append(f"📡 API Call: ❌ Empty response")
+            if hasattr(response, 'candidates'):
+                lines.append(f"   Candidates: {response.candidates}")
+    except Exception as e:
+        lines.append(f"📡 API Call: ❌ ERROR")
+        lines.append(f"   {type(e).__name__}: {str(e)[:200]}")
+        lines.append(f"   Traceback: {traceback.format_exc()[-300:]}")
+
+    await message.answer("\n".join(lines))
+
+
 @router.message(Command("publish"))
 async def cmd_publish(message: Message):
     """Publish all approved posts."""
