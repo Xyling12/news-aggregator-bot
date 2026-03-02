@@ -1,6 +1,6 @@
 """
-Channel Monitor — uses Telethon (bot token) to poll public Telegram channels for new posts.
-No user session required — authenticates with bot token.
+Channel Monitor — uses Telethon USER session to poll public Telegram channels.
+Requires one-time auth via: docker exec -it news-bot python -m src.init_session
 """
 
 import asyncio
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelMonitor:
-    """Monitors public Telegram channels for new posts using Telethon bot token + polling."""
+    """Monitors public Telegram channels using Telethon user session + polling."""
 
     def __init__(self, config: Config, db: Database):
         self.config = config
@@ -33,9 +33,17 @@ class ChannelMonitor:
         self._running = False
 
     async def start(self):
-        """Initialize Telethon client with bot token and start polling."""
-        session_path = os.path.join("data", "bot_session")
+        """Initialize Telethon client with existing session and start polling."""
+        session_path = os.path.join("data", self.config.session_name)
         os.makedirs("data", exist_ok=True)
+
+        # Check if session file exists
+        session_file = session_path + ".session"
+        if not os.path.exists(session_file):
+            raise FileNotFoundError(
+                f"Session file not found: {session_file}. "
+                "Run: docker exec -it news-bot python -m src.init_session"
+            )
 
         self.client = TelegramClient(
             session_path,
@@ -43,10 +51,15 @@ class ChannelMonitor:
             self.config.api_hash,
         )
 
-        # Authenticate with bot token — no phone/code needed!
-        await self.client.start(bot_token=self.config.bot_token)
+        await self.client.connect()
+        if not await self.client.is_user_authorized():
+            raise RuntimeError(
+                "Telethon session expired. "
+                "Run: docker exec -it news-bot python -m src.init_session"
+            )
+
         me = await self.client.get_me()
-        logger.info(f"Telethon bot client started: {me.first_name} (ID: {me.id})")
+        logger.info(f"Telethon user client started: {me.first_name} (ID: {me.id})")
 
         # Register source channels in the DB
         for channel in self.config.source_channels:
@@ -59,7 +72,7 @@ class ChannelMonitor:
         logger.info(f"Polling {len(self.config.source_channels)} channels every {self.config.check_interval}s")
 
     async def stop(self):
-        """Stop polling and disconnect Telethon client."""
+        """Stop polling and disconnect."""
         self._running = False
         if self._polling_task:
             self._polling_task.cancel()
@@ -72,14 +85,14 @@ class ChannelMonitor:
             logger.info("Telethon client disconnected")
 
     def on_new_post(self, callback: Callable):
-        """Register a callback for when a new post is found and saved to the DB."""
+        """Register a callback for new posts."""
         self._on_new_post_callback = callback
 
     async def _poll_channels(self):
         """Continuously poll all source channels for new messages."""
         logger.info("Channel polling loop started")
 
-        # Initial catch-up: fetch recent posts
+        # Initial catch-up
         for channel in self.config.source_channels:
             try:
                 await self._check_channel(channel, limit=5)
@@ -90,18 +103,16 @@ class ChannelMonitor:
         while self._running:
             try:
                 await asyncio.sleep(self.config.check_interval)
-
                 for channel in self.config.source_channels:
                     try:
                         await self._check_channel(channel, limit=10)
                     except Exception as e:
-                        logger.error(f"Poll check failed for @{channel}: {e}")
-
+                        logger.error(f"Poll failed for @{channel}: {e}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Polling loop error: {e}", exc_info=True)
-                await asyncio.sleep(30)  # Wait before retrying
+                await asyncio.sleep(30)
 
         logger.info("Channel polling loop stopped")
 
@@ -122,14 +133,13 @@ class ChannelMonitor:
             ):
                 messages.append(message)
 
-            # Process in chronological order (oldest first)
+            # Process oldest first
             for message in reversed(messages):
                 if not message.text or len(message.text) < self.config.min_text_length:
                     continue
                 if message.forward:
                     continue
 
-                # Determine media type
                 media_type = "none"
                 media_local_path = None
 
@@ -146,7 +156,6 @@ class ChannelMonitor:
                             if media_type == "none":
                                 media_type = "document"
 
-                    # Download media
                     if media_type in ("photo", "video"):
                         try:
                             os.makedirs(self.config.media_dir, exist_ok=True)
@@ -157,7 +166,6 @@ class ChannelMonitor:
                         except Exception as e:
                             logger.error(f"Failed to download media: {e}")
 
-                # Save post to database
                 post_id = await self.db.add_post(
                     source_channel=channel_username,
                     source_message_id=message.id,
@@ -169,11 +177,8 @@ class ChannelMonitor:
                 if post_id:
                     await self.db.update_last_message_id(channel_username, message.id)
                     new_count += 1
-
-                    # Trigger callback
                     if self._on_new_post_callback:
                         await self._on_new_post_callback(post_id)
-
                     logger.info(f"Post #{post_id} from @{channel_username}: {message.text[:80]}...")
 
             if new_count > 0:
