@@ -24,6 +24,7 @@ services:
       - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
       - PUBLISH_INTERVAL=${PUBLISH_INTERVAL:-7200}
       - LANGUAGE=${LANGUAGE:-ru}
+      - TELETHON_SESSION=${TELETHON_SESSION:-}
     networks:
       - dokploy-network
 

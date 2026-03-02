@@ -1,6 +1,6 @@
 """
-Channel Monitor — uses Telethon USER session to poll public Telegram channels.
-Requires one-time auth via: docker exec -it news-bot python -m src.init_session
+Channel Monitor — uses Telethon USER session (StringSession) to poll public channels.
+Session string is loaded from TELETHON_SESSION env var.
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import os
 from typing import Callable, Optional, List
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.types import (
     MessageMediaPhoto,
     MessageMediaDocument,
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelMonitor:
-    """Monitors public Telegram channels using Telethon user session + polling."""
+    """Monitors public Telegram channels using Telethon StringSession + polling."""
 
     def __init__(self, config: Config, db: Database):
         self.config = config
@@ -33,20 +34,16 @@ class ChannelMonitor:
         self._running = False
 
     async def start(self):
-        """Initialize Telethon client with existing session and start polling."""
-        session_path = os.path.join("data", self.config.session_name)
-        os.makedirs("data", exist_ok=True)
-
-        # Check if session file exists
-        session_file = session_path + ".session"
-        if not os.path.exists(session_file):
-            raise FileNotFoundError(
-                f"Session file not found: {session_file}. "
-                "Run: docker exec -it news-bot python -m src.init_session"
+        """Initialize Telethon client from StringSession env var."""
+        session_str = os.getenv("TELETHON_SESSION", "")
+        if not session_str:
+            raise ValueError(
+                "TELETHON_SESSION env var is empty. "
+                "Run create_session.py locally to generate it."
             )
 
         self.client = TelegramClient(
-            session_path,
+            StringSession(session_str),
             self.config.api_id,
             self.config.api_hash,
         )
@@ -55,16 +52,16 @@ class ChannelMonitor:
         if not await self.client.is_user_authorized():
             raise RuntimeError(
                 "Telethon session expired. "
-                "Run: docker exec -it news-bot python -m src.init_session"
+                "Re-run create_session.py locally."
             )
 
         me = await self.client.get_me()
-        logger.info(f"Telethon user client started: {me.first_name} (ID: {me.id})")
+        logger.info(f"Telethon user connected: {me.first_name} (ID: {me.id})")
 
         # Register source channels in the DB
         for channel in self.config.source_channels:
             await self.db.add_source(channel)
-            logger.info(f"Registered source channel: @{channel}")
+            logger.info(f"Registered source: @{channel}")
 
         # Start polling loop
         self._running = True
@@ -89,7 +86,7 @@ class ChannelMonitor:
         self._on_new_post_callback = callback
 
     async def _poll_channels(self):
-        """Continuously poll all source channels for new messages."""
+        """Poll all source channels for new messages."""
         logger.info("Channel polling loop started")
 
         # Initial catch-up
@@ -99,7 +96,7 @@ class ChannelMonitor:
             except Exception as e:
                 logger.error(f"Initial fetch failed for @{channel}: {e}")
 
-        # Main polling loop
+        # Main loop
         while self._running:
             try:
                 await asyncio.sleep(self.config.check_interval)
