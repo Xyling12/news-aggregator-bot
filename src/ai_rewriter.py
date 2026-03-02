@@ -118,15 +118,33 @@ class AIRewriter:
     def __init__(self, config: Config):
         self.config = config
         self._gemini_model = None
+        self._gemini_models = []  # Fallback models list
         self._setup_gemini()
 
     def _setup_gemini(self):
-        """Initialize Gemini API client."""
+        """Initialize Gemini API client with fallback models."""
         if self.config.gemini_api_key:
             try:
                 genai.configure(api_key=self.config.gemini_api_key)
-                self._gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-                logger.info("Gemini API configured successfully")
+                # Multiple models — each has separate free tier quota
+                model_names = [
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash",
+                    "gemini-1.5-flash-8b",
+                ]
+                for name in model_names:
+                    try:
+                        model = genai.GenerativeModel(name)
+                        self._gemini_models.append((name, model))
+                    except Exception as e:
+                        logger.warning(f"Failed to init model {name}: {e}")
+                
+                if self._gemini_models:
+                    self._gemini_model = self._gemini_models[0][1]
+                    names = [m[0] for m in self._gemini_models]
+                    logger.info(f"Gemini API configured: {', '.join(names)}")
+                else:
+                    logger.error("No Gemini models available!")
             except Exception as e:
                 logger.error(f"Failed to configure Gemini API: {e}")
         else:
@@ -189,25 +207,23 @@ class AIRewriter:
         return None, "error"
 
     async def _rewrite_with_gemini(self, text: str) -> Optional[str]:
-        """Rewrite text using Google Gemini with retry on rate limit."""
-        max_retries = 3
-        delays = [5, 15, 30]  # seconds between retries
+        """Rewrite text using Google Gemini with model fallback on quota errors."""
+        if not self._gemini_models:
+            logger.error("No Gemini models available for rewrite")
+            return None
 
-        for attempt in range(max_retries):
+        for model_name, model in self._gemini_models:
             try:
-                # On retry after low uniqueness, use stronger instruction
-                if attempt > 0:
-                    extra = "\n\n⚠️ ПРЕДУПРЕЖДЕНИЕ: Предыдущий рерайт был СЛИШКОМ ПОХОЖ на оригинал. ПОЛНОСТЬЮ ПЕРЕПИШИ КАЖДОЕ ПРЕДЛОЖЕНИЕ. Используй ДРУГИЕ слова, ДРУГУЮ структуру, ДРУГОЙ порядок фактов."
-                    prompt = (REWRITE_PROMPT + extra).format(text=text)
-                else:
-                    prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+                prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
 
                 # Run sync Gemini call in executor to avoid blocking
                 loop = asyncio.get_event_loop()
+                _model = model  # capture for lambda
+                _prompt = prompt
                 response = await loop.run_in_executor(
                     None,
-                    lambda: self._gemini_model.generate_content(
-                        prompt,
+                    lambda: _model.generate_content(
+                        _prompt,
                         generation_config=genai.GenerationConfig(
                             temperature=0.9,
                             max_output_tokens=2048,
@@ -218,43 +234,47 @@ class AIRewriter:
 
                 if response and response.text:
                     rewritten = response.text.strip()
-                    # Quality check: length + uniqueness
                     if len(rewritten) > 50 and rewritten != text:
                         uniqueness = self.calculate_uniqueness(text, rewritten)
-                        logger.info(f"Gemini attempt {attempt+1}: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
+                        logger.info(f"Gemini [{model_name}]: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
                         
-                        if uniqueness >= 0.4:  # 40%+ uniqueness = OK
+                        if uniqueness >= 0.4:
                             return rewritten
                         else:
-                            logger.warning(f"Gemini rewrite too similar ({uniqueness:.0%}), retrying...")
-                            if attempt < max_retries - 1:
-                                await asyncio.sleep(2)
-                                continue
-                            else:
-                                logger.warning("All retries exhausted with low uniqueness, using last result")
-                                return rewritten
+                            # Low uniqueness — retry with stronger prompt
+                            extra = "\n\n⚠️ ПОЛНОСТЬЮ ПЕРЕПИШИ КАЖДОЕ ПРЕДЛОЖЕНИЕ. Используй ДРУГИЕ слова и структуру."
+                            strong_prompt = (REWRITE_PROMPT + extra).format(text=text)
+                            _sp = strong_prompt
+                            response2 = await loop.run_in_executor(
+                                None,
+                                lambda: _model.generate_content(
+                                    _sp,
+                                    generation_config=genai.GenerationConfig(temperature=0.95, max_output_tokens=2048),
+                                    safety_settings=SAFETY_SETTINGS,
+                                ),
+                            )
+                            if response2 and response2.text:
+                                return response2.text.strip()
+                            return rewritten  # Use low-uniqueness version as last resort
                     else:
-                        logger.warning("Gemini returned too short or identical text")
+                        logger.warning(f"Gemini [{model_name}]: too short or identical")
                         return None
                 else:
-                    logger.warning(f"Gemini returned empty response (attempt {attempt+1})")
-                    if response:
-                        logger.warning(f"Response candidates: {response.candidates if hasattr(response, 'candidates') else 'none'}")
+                    logger.warning(f"Gemini [{model_name}]: empty response")
                     return None
 
             except Exception as e:
                 error_str = str(e).lower()
-                is_rate_limit = "429" in error_str or "rate" in error_str or "quota" in error_str or "resource" in error_str
-
-                if is_rate_limit and attempt < max_retries - 1:
-                    delay = delays[attempt]
-                    logger.warning(f"Gemini rate limit (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
-                    await asyncio.sleep(delay)
-                    continue
+                is_quota = "429" in error_str or "quota" in error_str or "resource" in error_str
+                
+                if is_quota:
+                    logger.warning(f"Gemini [{model_name}]: quota exhausted, trying next model...")
+                    continue  # Try next model
                 else:
-                    logger.error(f"Gemini rewrite failed: {e}")
+                    logger.error(f"Gemini [{model_name}] error: {e}")
                     return None
 
+        logger.error("All Gemini models exhausted (quota)")
         return None
 
     async def _rewrite_with_retext(self, text: str) -> Optional[str]:
