@@ -76,21 +76,13 @@ async def main():
     monitor_started = False
 
     try:
-        # Try to start Telethon client (may fail if no session)
+        # Start Telethon channel monitor (uses bot token, no user session needed)
         try:
             await monitor.start()
             monitor_started = True
-            logger.info("Channel monitor started")
-
-            # Fetch recent posts from all sources (catch-up)
-            for channel in config.source_channels:
-                posts = await monitor.fetch_recent_posts(channel, limit=3)
-                if posts:
-                    logger.info(f"Fetched {len(posts)} recent posts from @{channel}")
+            logger.info("Channel monitor started (bot token + polling)")
         except Exception as e:
             logger.warning(f"⚠️ Channel monitor failed to start: {e}")
-            logger.warning("Run: docker exec -it news-bot python -m src.init_session")
-            logger.warning("Then: docker restart news-bot")
             logger.info("Bot will continue WITHOUT channel monitoring...")
 
         # Start auto-publish scheduler
