@@ -11,20 +11,16 @@ services:
       - bot_data:/app/data
       - bot_media:/app/media
     environment:
-      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
-      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
-      - BOT_TOKEN=${BOT_TOKEN}
-      - TARGET_CHANNEL=${TARGET_CHANNEL}
-      - ADMIN_IDS=${ADMIN_IDS}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - SOURCE_CHANNELS=${SOURCE_CHANNELS}
-      - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY:-}
-      - RETEXT_API_KEY=${RETEXT_API_KEY:-}
-      - MIN_TEXT_LENGTH=${MIN_TEXT_LENGTH:-100}
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
-      - PUBLISH_INTERVAL=${PUBLISH_INTERVAL:-7200}
-      - LANGUAGE=${LANGUAGE:-ru}
-      - TELETHON_SESSION=${TELETHON_SESSION:-}
+      - BOT_TOKEN=8523597327:AAHO0yYNm4RasEU0MKfBXBnCx538SAPhG8U
+      - TARGET_CHANNEL=IzhevskTodayNews
+      - ADMIN_IDS=376060133
+      - GEMINI_API_KEY=AIzaSyAG_Ud97y8hsxFQUJYghzQjLXW_B4-neDw
+      - SOURCE_CHANNELS=izhevsk_smi,izhevsktop1,udm_info,Izhlife_ru,susaninudm,kommersant18,rian_ru
+      - UNSPLASH_ACCESS_KEY=IM-qQbut_JlLKNAM-PtBvcbkxcMXir3AP53j79n9q4E
+      - MIN_TEXT_LENGTH=100
+      - CHECK_INTERVAL=60
+      - PUBLISH_INTERVAL=7200
+      - LANGUAGE=ru
     networks:
       - dokploy-network
 

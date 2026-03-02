@@ -38,6 +38,9 @@ class EditPostStates(StatesGroup):
 class AddSourceStates(StatesGroup):
     waiting_for_channel = State()
 
+class SendNewsStates(StatesGroup):
+    waiting_for_news = State()
+
 
 # ── Globals (set during init) ────────────────────────────────────────────
 
@@ -110,17 +113,84 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """Handle /start command."""
-    if not is_admin(message.from_user.id):
-        await message.answer("⛔ Доступ запрещён. Только для администраторов.")
-        return
+    if is_admin(message.from_user.id):
+        await message.answer(
+            "🤖 <b>Ижевск Сегодня — Админ-панель</b>\n\n"
+            "Я мониторю каналы-источники, переписываю новости через AI "
+            "и отправляю их тебе на модерацию.\n\n"
+            "📌 Используй меню ниже для управления:",
+            reply_markup=get_main_keyboard(),
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await message.answer(
+            "📰 <b>Ижевск Сегодня</b>\n\n"
+            "Привет! Я бот новостного канала @IzhevskTodayNews.\n\n"
+            "📩 Хочешь прислать новость? Нажми /news\n"
+            "📲 Подписаться: @IzhevskTodayNews",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@router.message(Command("news"))
+async def cmd_news(message: Message, state: FSMContext):
+    """Start news submission from any user."""
+    await state.set_state(SendNewsStates.waiting_for_news)
+    await message.answer(
+        "📩 <b>Прислать новость</b>\n\n"
+        "Отправь мне текст или фото с описанием новости.\n"
+        "Если новость интересная — мы опубликуем её на канале!\n\n"
+        "Для отмены нажми /cancel",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    """Cancel any active FSM state."""
+    await state.clear()
+    await message.answer("❌ Отменено.")
+
+
+@router.message(SendNewsStates.waiting_for_news)
+async def process_user_news(message: Message, state: FSMContext):
+    """Process user-submitted news and forward to admins."""
+    await state.clear()
+
+    user = message.from_user
+    user_info = f"{user.full_name}"
+    if user.username:
+        user_info += f" (@{user.username})"
+
+    # Notify all admins
+    for admin_id in _config.admin_ids:
+        try:
+            admin_text = (
+                f"📩 <b>Новость от подписчика</b>\n"
+                f"👤 {_escape_html(user_info)}\n\n"
+            )
+            if message.text:
+                admin_text += f"{_escape_html(message.text[:2000])}"
+                await _bot.send_message(admin_id, admin_text, parse_mode=ParseMode.HTML)
+            elif message.photo:
+                caption = message.caption or ""
+                admin_text += f"{_escape_html(caption[:800])}"
+                await _bot.send_photo(
+                    admin_id,
+                    photo=message.photo[-1].file_id,
+                    caption=admin_text,
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                admin_text += "(медиа-сообщение)"
+                await _bot.send_message(admin_id, admin_text, parse_mode=ParseMode.HTML)
+                await message.forward(admin_id)
+        except Exception as e:
+            logger.error(f"Failed to forward user news to admin {admin_id}: {e}")
 
     await message.answer(
-        "🤖 **News Aggregator Bot**\n\n"
-        "Я мониторю каналы-источники, переписываю новости через AI "
-        "и отправляю их тебе на модерацию.\n\n"
-        "📌 Используй меню ниже для управления:",
-        reply_markup=get_main_keyboard(),
-        parse_mode=ParseMode.MARKDOWN,
+        "✅ Спасибо! Ваша новость отправлена редакции.\n"
+        "Если она интересная — мы опубликуем её на канале @IzhevskTodayNews!",
     )
 
 
@@ -551,25 +621,27 @@ def _escape_html(text: str) -> str:
 
 
 def _format_post(text: str, hashtags: list) -> str:
-    """Format post with premium Telegram template."""
+    """Format post with premium Telegram template and convert markdown to HTML."""
+    import re
+    
+    # Convert **bold** markdown to <b>bold</b> HTML
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    # Remove any leftover markdown headers (# ## ###)
+    text = re.sub(r'^#{1,3}\s*', '', text, flags=re.MULTILINE)
+    
     lines = text.strip().split("\n")
     if not lines:
         return text
 
-    # First line = title
-    title = lines[0].strip()
-    # Remove any markdown bold markers
-    title = title.replace("**", "").replace("__", "")
-    body = "\n".join(lines[1:]).strip()
-
     # Build formatted post
     parts = []
 
-    # Title with emoji
-    parts.append(f"📰 {title}")
+    # Title — Gemini already provides emoji + title, keep as-is
+    parts.append(lines[0].strip())
     parts.append("")
 
     # Body text
+    body = "\n".join(lines[1:]).strip()
     if body:
         parts.append(body)
         parts.append("")
@@ -579,8 +651,8 @@ def _format_post(text: str, hashtags: list) -> str:
         parts.append(" ".join(hashtags))
         parts.append("")
 
-    # Channel branding footer
-    parts.append("📢 @IzhevskTodayNews")
+    # Premium CTA footer
+    parts.append("😊 <a href=\"https://t.me/IzhevskTodayNews\">Подписаться</a> | 📩 <a href=\"https://t.me/IzhevskTodayBot\">Прислать новость</a>")
 
     return "\n".join(parts)
 

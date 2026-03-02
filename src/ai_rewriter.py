@@ -8,45 +8,75 @@ import asyncio
 from typing import Optional, Tuple
 
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import aiohttp
 
 from src.config import Config
 
 logger = logging.getLogger(__name__)
 
-# Prompt template for news rewriting
-REWRITE_PROMPT = """Ты — профессиональный рерайтер новостей на русском языке. 
+# Prompt template for news rewriting — premium Telegram channel style
+REWRITE_PROMPT = """Ты — главный редактор популярного новостного Telegram-канала "Ижевск Сегодня".
 
-Твоя задача — полностью переписать текст новости, сохранив:
-- Все ключевые факты и цифры
-- Хронологию событий
-- Имена и названия
+Твоя задача — ПОЛНОСТЬЮ ПЕРЕПИСАТЬ текст новости в стиле крупного Telegram-канала.
 
-При этом ты ДОЛЖЕН:
-1. Полностью изменить структуру предложений
-2. Использовать другие формулировки и синонимы  
-3. Изменить порядок подачи информации
-4. Сделать текст уникальным (не менее 80% уникальности)
-5. Сохранить информативный стиль
-6. НЕ добавлять своих комментариев или оценок
-7. НЕ упоминать источник оригинальной новости
-8. Написать новый заголовок (первая строка)
-9. УДАЛИТЬ любые ссылки, упоминания исходного канала, "подписаться", "повестка дня — на сайте"
-10. УДАЛИТЬ рекламные блоки и ссылки на сторонние сайты
+ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ОФОРМЛЕНИЯ:
 
-Формат ответа:
-Первая строка — заголовок (жирным не выделять)
-Далее — текст новости
+1. ЗАГОЛОВОК (первая строка):
+   - Начни с ОДНОГО тематического эмодзи (❄️ погода, 🔥 пожар, ⚡ срочное, 🚗 транспорт, 💰 экономика, 🏗 стройка, 👮 полиция, 🏥 медицина, 📚 образование, ⚽ спорт, 🌡 погода, 😱 шок, ❗️ важное, 🎉 праздник, 🔧 ЖКХ)
+   - Дальше — короткий ЦЕПЛЯЮЩИЙ заголовок (макс 10 слов)
+   - Пример: ❄️ Ещё 11 крыш рухнуло в Удмуртии из-за снега
 
-Вот оригинальный текст для рерайта:
+2. ТЕКСТ НОВОСТИ:
+   - Короткие абзацы (2-3 предложения МАКСИМУМ)
+   - Ключевые факты выделяй **жирным** (даты, цифры, имена, адреса)
+   - Если есть перечисление — оформи как список с маркером ❗️
+   - НЕ БОЛЕЕ 5-7 абзацев
+   - Пиши живым языком, НЕ канцелярит
+
+3. ЗАПРЕЩЕНО:
+   - Упоминать источник оригинала
+   - Оставлять "подписаться", "читайте на сайте" и т.п.
+   - Копировать текст — ВСЁ должно быть ПЕРЕПИСАНО своими словами
+   - Добавлять свои комментарии или оценки
+   - Использовать Markdown заголовки (# ## ###)
+
+4. ФОРМАТ ОТВЕТА:
+Эмодзи + Заголовок
+
+Первый абзац текста.
+
+Второй абзац с **ключевыми фактами**.
+
+❗️ Пункт списка один
+❗️ Пункт списка два
+
+Завершающий абзац.
+
+Перепиши эту новость:
 
 {text}"""
 
 # Simpler prompt for shorter texts
-REWRITE_SHORT_PROMPT = """Перепиши этот текст своими словами, сохранив смысл и факты. 
-Измени формулировки и структуру предложений. Не добавляй комментариев.
+REWRITE_SHORT_PROMPT = """Ты — редактор Telegram-канала "Ижевск Сегодня". 
+Перепиши новость СВОИМИ СЛОВАМИ. 
+
+Правила:
+- Начни с эмодзи по теме + короткий цепляющий заголовок
+- Выдели **жирным** ключевые факты
+- Короткие абзацы (2-3 предложения)
+- НЕ копируй текст, ПЕРЕПИШИ полностью
+- НЕ упоминай источник
 
 {text}"""
+
+# Safety settings — allow all content (news about accidents/crime gets blocked otherwise)
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
 
 # Prompt to check if news is of general interest (not region-specific)
 RELEVANCE_PROMPT = """Ты — редактор новостного канала для жителей Ижевска и Удмуртии.
@@ -92,6 +122,8 @@ class AIRewriter:
                 logger.info("Gemini API configured successfully")
             except Exception as e:
                 logger.error(f"Failed to configure Gemini API: {e}")
+        else:
+            logger.error("⚠️ GEMINI_API_KEY is NOT SET! AI rewrite will NOT work!")
 
     async def check_relevance(self, text: str) -> bool:
         """
@@ -165,9 +197,10 @@ class AIRewriter:
                     lambda: self._gemini_model.generate_content(
                         prompt,
                         generation_config=genai.GenerationConfig(
-                            temperature=0.7,
+                            temperature=0.8,
                             max_output_tokens=2048,
                         ),
+                        safety_settings=SAFETY_SETTINGS,
                     ),
                 )
 
