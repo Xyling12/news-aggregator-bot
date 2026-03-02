@@ -1,11 +1,13 @@
-#!/bin/sh
-# init-session.sh — Interactive Telethon session initialization
-# Run this inside Docker to create the session file
-# Usage: docker exec -it news-bot python -m src.init_session
+"""
+Interactive Telethon session initialization.
+Run inside Docker: docker exec -it news-bot python -m src.init_session
+"""
 
 import asyncio
+import os
 from telethon import TelegramClient
 from src.config import Config
+
 
 async def main():
     config = Config.from_env()
@@ -13,12 +15,17 @@ async def main():
     print("🔐 Telethon Session Initialization")
     print("=" * 50)
     print()
-    print("Вам нужно ввести номер телефона и код из Telegram.")
+    print("Введите номер телефона (например +79XXXXXXXXX).")
+    print("Код придёт в Telegram-приложение (не SMS).")
     print("Это нужно только ОДИН раз.")
     print()
 
+    # Use same path as channel_monitor.py
+    session_path = os.path.join("data", config.session_name)
+    os.makedirs("data", exist_ok=True)
+
     client = TelegramClient(
-        config.session_name,
+        session_path,
         config.api_id,
         config.api_hash,
     )
@@ -26,7 +33,9 @@ async def main():
     await client.start()
     me = await client.get_me()
     print(f"\n✅ Сессия создана! Вы {me.first_name} (ID: {me.id})")
+    print(f"📁 Файл сессии: {session_path}.session")
     await client.disconnect()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

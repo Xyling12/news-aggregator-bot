@@ -96,7 +96,8 @@ async def main():
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
-        publish_task.cancel()
+        if 'publish_task' in dir():
+            publish_task.cancel()
         await monitor.stop()
         await db.close()
         await bot.session.close()
