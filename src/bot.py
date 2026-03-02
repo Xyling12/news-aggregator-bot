@@ -550,6 +550,41 @@ def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _format_post(text: str, hashtags: list) -> str:
+    """Format post with premium Telegram template."""
+    lines = text.strip().split("\n")
+    if not lines:
+        return text
+
+    # First line = title
+    title = lines[0].strip()
+    # Remove any markdown bold markers
+    title = title.replace("**", "").replace("__", "")
+    body = "\n".join(lines[1:]).strip()
+
+    # Build formatted post
+    parts = []
+
+    # Title with emoji
+    parts.append(f"📰 {title}")
+    parts.append("")
+
+    # Body text
+    if body:
+        parts.append(body)
+        parts.append("")
+
+    # Hashtags
+    if hashtags:
+        parts.append(" ".join(hashtags))
+        parts.append("")
+
+    # Channel branding footer
+    parts.append("📢 @IzhevskTodayNews")
+
+    return "\n".join(parts)
+
+
 def _clean_text(text: str) -> str:
     """Remove source attribution lines, subscribe links, and external URLs from post text."""
     import re
@@ -605,34 +640,39 @@ async def _send_review_post(chat_id: int, post: dict):
     )
 
     # Add media info
-    if post["media_type"] != "none":
+    if post.get("replacement_media_url"):
+        text += f"\n\n🖼 Стоковое фото подобрано ✅"
+    elif post["media_type"] != "none":
         text += f"\n\n🖼 Медиа: {post['media_type']}"
         if post.get("has_watermark"):
             text += " ⚠️ Обнаружен водяной знак!"
 
     # If post has media, send with media
+    replacement_url = post.get("replacement_media_url")
     media_path = post.get("media_local_path")
     media_url = post.get("media_file_id")  # Remote URL fallback
 
-    if post["media_type"] == "photo":
-        photo_source = None
-        if media_path and os.path.exists(media_path):
-            photo_source = FSInputFile(media_path)
-        elif media_url:
-            photo_source = media_url
+    # Try: stock photo > local file > remote URL
+    photo_source = None
+    if replacement_url:
+        photo_source = replacement_url
+    elif media_path and os.path.exists(media_path) and post["media_type"] == "photo":
+        photo_source = FSInputFile(media_path)
+    elif media_url and post["media_type"] == "photo":
+        photo_source = media_url
 
-        if photo_source:
-            try:
-                await _bot.send_photo(
-                    chat_id,
-                    photo=photo_source,
-                    caption=text[:1024],
-                    reply_markup=get_review_keyboard(post["id"]),
-                    parse_mode=ParseMode.HTML,
-                )
-                return
-            except Exception as e:
-                logger.error(f"Failed to send media: {e}")
+    if photo_source:
+        try:
+            await _bot.send_photo(
+                chat_id,
+                photo=photo_source,
+                caption=text[:1024],
+                reply_markup=get_review_keyboard(post["id"]),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        except Exception as e:
+            logger.error(f"Failed to send media: {e}")
 
     # Send text only
     await _bot.send_message(
@@ -769,13 +809,25 @@ async def process_new_post(post_id: int):
 
     # Step 2: Generate hashtags
     hashtags = await _rewriter.generate_hashtags(rewritten)
-    if hashtags:
-        rewritten = rewritten.rstrip() + "\n\n" + " ".join(hashtags)
-        logger.info(f"Post #{post_id} hashtags: {' '.join(hashtags)}")
+
+    # Step 2.5: Format post with premium template
+    rewritten = _format_post(rewritten, hashtags)
 
     await _db.update_post_rewrite(post_id, rewritten)
 
-    # Step 3: Media processing (watermark detection)
+    # Step 3: Find unique stock photo (always try for unique content)
+    try:
+        keywords = await _rewriter.generate_keywords(original_text)
+        if keywords:
+            stock_photos = await _media_processor.search_stock_photo(keywords)
+            if stock_photos:
+                stock_url = stock_photos[0]["url"]
+                await _db.update_post_media(post_id, replacement_url=stock_url)
+                logger.info(f"Post #{post_id}: stock photo found for '{' '.join(keywords)}'")
+    except Exception as e:
+        logger.error(f"Post #{post_id}: stock photo search failed: {e}")
+
+    # Step 3b: Watermark detection on original photo
     if post["media_type"] == "photo" and post.get("media_local_path"):
         has_watermark, confidence = _media_processor.detect_watermark(post["media_local_path"])
         if has_watermark:
