@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  news-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news-bot
+    restart: unless-stopped
+    volumes:
+      - bot_data:/app/data
+      - bot_media:/app/media
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - TARGET_CHANNEL=${TARGET_CHANNEL}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SOURCE_CHANNELS=${SOURCE_CHANNELS}
+      - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY:-}
+      - RETEXT_API_KEY=${RETEXT_API_KEY:-}
+      - MIN_TEXT_LENGTH=${MIN_TEXT_LENGTH:-100}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
+      - PUBLISH_INTERVAL=${PUBLISH_INTERVAL:-7200}
+      - LANGUAGE=${LANGUAGE:-ru}
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  bot_data:
+  bot_media:
