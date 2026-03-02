@@ -309,6 +309,66 @@ async def cmd_test_gemini(message: Message):
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("testai"))
+async def cmd_test_ai(message: Message):
+    """Test ALL AI engines — admin only diagnostic."""
+    if not is_admin(message.from_user.id):
+        return
+
+    import traceback
+    import aiohttp
+    lines = ["🔍 **Тест всех AI-движков:**\n"]
+
+    # Test 1: Gemini
+    lines.append("═══ GEMINI ═══")
+    key = _config.gemini_api_key if _config else ""
+    lines.append(f"🔑 Key: {'SET (' + key[:10] + '...)' if key else '❌ NOT SET'}")
+    if _rewriter and _rewriter._gemini_models:
+        names = [m[0] for m in _rewriter._gemini_models]
+        lines.append(f"🤖 Models: {', '.join(names)}")
+    else:
+        lines.append("🤖 Models: ❌ none")
+
+    # Test 2: YandexGPT
+    lines.append("\n═══ YANDEX GPT ═══")
+    ykey = _config.yandex_api_key if _config else ""
+    yfolder = _config.yandex_folder_id if _config else ""
+    lines.append(f"🔑 Key: {'SET (' + ykey[:10] + '...)' if ykey else '❌ NOT SET'}")
+    lines.append(f"📁 Folder: {yfolder if yfolder else '❌ NOT SET'}")
+
+    if ykey and yfolder:
+        try:
+            url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+            headers = {
+                "Authorization": f"Api-Key {ykey}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "modelUri": f"gpt://{yfolder}/yandexgpt-lite/latest",
+                "completionOptions": {"stream": False, "temperature": 0.3, "maxTokens": "50"},
+                "messages": [{"role": "user", "text": "Скажи одно слово: привет"}],
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        text = data["result"]["alternatives"][0]["message"]["text"]
+                        lines.append(f"📡 API: ✅ OK — '{text.strip()[:50]}'")
+                    else:
+                        error = await resp.text()
+                        lines.append(f"📡 API: ❌ HTTP {resp.status}")
+                        lines.append(f"   {error[:300]}")
+        except Exception as e:
+            lines.append(f"📡 API: ❌ {type(e).__name__}: {str(e)[:200]}")
+
+    # Test 3: ReText
+    lines.append("\n═══ RETEXT.AI ═══")
+    rkey = _config.retext_api_key if _config else ""
+    lines.append(f"🔑 Key: {'SET' if rkey else '❌ NOT SET'}")
+
+    await message.answer("\n".join(lines))
+
+
 @router.message(Command("publish"))
 async def cmd_publish(message: Message):
     """Publish all approved posts."""

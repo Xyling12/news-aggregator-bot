@@ -1,6 +1,7 @@
 # Environment
 .env
 *.session
+test_yandex.py
 *.session-journal
 
 # Python
