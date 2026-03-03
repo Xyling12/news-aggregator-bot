@@ -97,15 +97,15 @@ class MediaProcessor:
             return False, 0.0
 
     async def search_stock_photo(self, keywords: List[str], count: int = 3) -> List[dict]:
-        """Search for stock photos. Tries Wikimedia Commons first (no key, accessible from Russia),
-        falls back to Unsplash if Wikimedia returns nothing.
+        """Search for stock photos.
 
-        Returns:
-            List of dicts with 'url', 'thumb_url', 'description', 'author', 'source'
+        Priority:
+          1. Wikimedia Commons — free, no key, accessible from Russia
+          2. Pixabay — free API (PIXABAY_API_KEY), Russian support, accessible from Russia
         """
         results = await self._search_wikimedia(keywords, count)
         if not results:
-            results = await self._search_unsplash(keywords, count)
+            results = await self._search_pixabay(keywords, count)
         return results
 
     async def _search_wikimedia(self, keywords: List[str], count: int) -> List[dict]:
@@ -238,52 +238,61 @@ class MediaProcessor:
 
         return results
 
-    async def _search_unsplash(self, keywords: List[str], count: int) -> List[dict]:
-        """Search Unsplash as a fallback. Requires UNSPLASH_ACCESS_KEY."""
-        if not self.unsplash_key:
+    async def _search_pixabay(self, keywords: List[str], count: int) -> List[dict]:
+        """Search Pixabay for photos. Requires PIXABAY_API_KEY.
+
+        Free API — register at https://pixabay.com/api/docs/
+        Accessible from Russia; supports English and Russian queries.
+        """
+        if not self.pixabay_key:
+            logger.info("Pixabay: no API key configured, skipping")
             return []
 
-        query = " ".join(keywords[:3])
+        query = " ".join(keywords[:4])
         results = []
 
         try:
             async with aiohttp.ClientSession() as session:
                 params = {
-                    "query": query,
-                    "per_page": count,
-                    "orientation": "landscape",
+                    "key": self.pixabay_key,
+                    "q": query,
+                    "image_type": "photo",
+                    "orientation": "horizontal",
+                    "per_page": count + 5,   # fetch extra, filter later
+                    "safesearch": "true",
+                    "lang": "en",
                 }
-                headers = {"Authorization": f"Client-ID {self.unsplash_key}"}
-
                 async with session.get(
-                    "https://api.unsplash.com/search/photos",
+                    "https://pixabay.com/api/",
                     params=params,
-                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        for photo in data.get("results", []):
+                        for hit in data.get("hits", [])[:count]:
                             results.append({
-                                "url": photo["urls"]["regular"],
-                                "thumb_url": photo["urls"]["thumb"],
-                                "description": photo.get("description", ""),
-                                "author": photo["user"]["name"],
-                                "source": "unsplash",
+                                "url": hit["largeImageURL"],
+                                "thumb_url": hit["previewURL"],
+                                "description": hit.get("tags", ""),
+                                "author": hit.get("user", "Pixabay"),
+                                "source": "pixabay",
                             })
                         logger.info(
-                            f"Unsplash: found {len(results)} photos for '{query}'"
+                            f"Pixabay: found {len(results)} photos for '{query}'"
                         )
+                    elif resp.status == 400:
+                        logger.error("Pixabay: bad request (check API key or query)")
+                    elif resp.status == 429:
+                        logger.warning("Pixabay: rate limit exceeded")
                     else:
-                        error = await resp.text()
-                        logger.error(f"Unsplash API {resp.status}: {error[:200]}")
+                        logger.error(f"Pixabay API {resp.status}")
 
         except asyncio.TimeoutError:
-            logger.error("Unsplash API timeout (>15s)")
+            logger.error("Pixabay API timeout (>15s)")
         except aiohttp.ClientError as e:
-            logger.error(f"Unsplash network error: {type(e).__name__}: {e}")
+            logger.error(f"Pixabay network error: {type(e).__name__}: {e}")
         except Exception as e:
-            logger.error(f"Unsplash search failed: {type(e).__name__}: {e}")
+            logger.error(f"Pixabay search failed: {type(e).__name__}: {e}")
 
         return results
 

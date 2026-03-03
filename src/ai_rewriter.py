@@ -526,30 +526,67 @@ class AIRewriter:
 
     @staticmethod
     def _extract_keywords_fallback(text: str) -> list[str]:
-        """Extract stock photo keywords using topic dictionary (no AI needed)."""
+        """Extract stock photo keywords using topic dictionary (no AI needed).
+
+        Uses a scored approach: counts keyword hits per topic and picks
+        the best-matching category, so incidental mentions (e.g. «в больнице»
+        at the end of a snow-rescue story) don't override the main topic.
+        """
         text_lower = text.lower()
         topic_map = [
-            (["пожар", "горит", "огонь", "возгорание"], ["fire", "firefighters", "flames"]),
-            (["авария", "дтп", "столкновение"], ["car accident", "traffic", "road"]),
-            (["полиция", "задержан", "арест", "преступ"], ["police", "law enforcement", "justice"]),
-            (["больниц", "медицин", "врач", "здоровь"], ["hospital", "doctor", "healthcare"]),
-            (["школ", "образован", "учител", "студент"], ["school", "education", "classroom"]),
-            (["строительств", "ремонт", "дорог", "стройк"], ["construction", "road", "workers"]),
-            (["экономик", "цен", "рубл", "инфляц", "зарплат"], ["economy", "finance", "money"]),
-            (["погода", "снег", "мороз", "дождь"], ["weather", "winter", "nature"]),
-            (["суд", "закон", "право"], ["court", "justice", "law"]),
-            (["спорт", "матч", "команд", "чемпион"], ["sport", "competition", "athletes"]),
-            (["армия", "воен", "солдат", "флот", "вмс", "нато"], ["military", "navy", "defense"]),
-            (["нефт", "газ", "топлив", "энерг"], ["oil", "gas", "energy"]),
-            (["выбор", "политик", "депутат", "власт"], ["politics", "government", "parliament"]),
-            (["технолог", "цифров", "интернет"], ["technology", "digital", "innovation"]),
-            (["жкх", "коммунал", "отоплен"], ["city infrastructure", "heating", "utilities"]),
-            (["транспорт", "автобус", "трамвай"], ["public transport", "bus", "city"]),
+            # Emergency / rescue — check first, very specific
+            (["спасен", "спасатель", "пропав", "застрял", "поиск"],
+             ["rescue", "search rescue", "emergency team"]),
+            (["пожар", "горит", "огонь", "возгорание"],
+             ["fire", "firefighters", "flames"]),
+            (["авария", "дтп", "столкновение"],
+             ["car accident", "traffic", "road"]),
+            (["взрыв", "взрывч", "беспилот", "атак", "обстрел"],
+             ["explosion", "drone attack", "military strike"]),
+            (["полиция", "задержан", "арест", "преступ"],
+             ["police", "law enforcement", "justice"]),
+            # Nature / weather — before hospital so «осмотрели в больнице» doesn't win
+            (["снег", "мороз", "пурга", "метель", "снежн"],
+             ["winter", "snow", "blizzard"]),
+            (["погода", "дождь", "гроза", "оттепел", "похолодан"],
+             ["weather", "rain", "nature"]),
+            # Infrastructure
+            (["строительств", "ремонт", "дорог", "стройк"],
+             ["construction", "road", "workers"]),
+            (["жкх", "коммунал", "отоплен", "водоснабжен"],
+             ["city infrastructure", "heating", "utilities"]),
+            (["транспорт", "автобус", "трамвай"],
+             ["public transport", "bus", "city"]),
+            # Society
+            (["школ", "образован", "учител", "студент"],
+             ["school", "education", "classroom"]),
+            (["больниц", "медицин", "врач", "хирург"],
+             ["hospital", "doctor", "healthcare"]),
+            (["экономик", "цен", "рубл", "инфляц", "зарплат"],
+             ["economy", "finance", "money"]),
+            (["суд", "закон", "право"],
+             ["court", "justice", "law"]),
+            (["спорт", "матч", "команд", "чемпион"],
+             ["sport", "competition", "athletes"]),
+            # Geopolitics
+            (["армия", "воен", "солдат", "флот", "вмс", "нато"],
+             ["military", "navy", "defense"]),
+            (["нефт", "газ", "топлив", "энерг"],
+             ["oil", "gas", "energy"]),
+            (["выбор", "политик", "депутат", "власт"],
+             ["politics", "government", "parliament"]),
+            (["технолог", "цифров", "интернет"],
+             ["technology", "digital", "innovation"]),
         ]
+        # Score each topic by number of keyword hits
+        best_score = 0
+        best_keywords = ["city", "news", "building"]
         for keywords_ru, keywords_en in topic_map:
-            if any(kw in text_lower for kw in keywords_ru):
-                return keywords_en
-        return ["city", "news", "building"]
+            score = sum(1 for kw in keywords_ru if kw in text_lower)
+            if score > best_score:
+                best_score = score
+                best_keywords = keywords_en
+        return best_keywords
 
     @staticmethod
     def _is_refusal(text: str) -> bool:
