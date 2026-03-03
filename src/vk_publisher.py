@@ -58,7 +58,7 @@ class VKPublisher:
         text = re.sub(r'\n*📩\s*@\w.*$', '', text.strip(), flags=re.MULTILINE)
         text = re.sub(r'\n*\S*t\.me/\S+.*$', '', text.strip(), flags=re.MULTILINE)
         text = text.strip()
-        text += "\n\n✉️ Ижевск Сегодня — подписывайтесь на наш канал ВКонтакте!"
+        text += f"\n\n✉️ Ижевск Сегодня — vk.com/club{self.group_id}"
 
         return text
 
