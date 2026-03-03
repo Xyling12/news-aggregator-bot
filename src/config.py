@@ -73,12 +73,17 @@ class Config:
         "#промо", "#ad", "оплаченная публикация",
     ])
 
-    # Low-value content filter (weather, horoscopes, etc.)
+    # Low-value content filter (weather, horoscopes, astrology, etc.)
     lowvalue_stop_words: List[str] = field(default_factory=lambda: [
         "погода", "прогноз погоды", "температура воздуха", "облачно",
         "осадки", "давление мм", "ветер м/с", "гороскоп",
         "знак зодиака", "лунный календарь", "цитата дня",
         "утренняя зарядка", "доброе утро", "с добрым утром",
+        # Astrology & mysticism
+        "астролог", "предсказание астролог", "предупреждение астролог",
+        "лунное затмение", "меркурий ретроград", "полнолуние",
+        "энергетика дня", "коридор затмений", "портал связан",
+        "ясновидящий", "гадание", "таромант", "магия", "заговор",
     ])
 
     # Breaking news keywords (auto-publish without moderation)
