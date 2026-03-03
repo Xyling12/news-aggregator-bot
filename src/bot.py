@@ -1043,6 +1043,13 @@ async def process_new_post(post_id: int):
 
     if rewritten:
         rewritten = _clean_text(rewritten)  # Clean AI output too
+
+        # Guard: if AI returned a refusal message — reject post immediately
+        if _rewriter._is_refusal(rewritten):
+            await _db.update_post_status(post_id, "rejected")
+            logger.warning(f"Post #{post_id} rejected: AI refusal detected in rewritten text")
+            return
+
         uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
         logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
     else:
@@ -1054,6 +1061,13 @@ async def process_new_post(post_id: int):
 
     # Step 2.5: Format post with premium template
     rewritten = _format_post(rewritten, hashtags)
+
+    # Step 2.6: Deduplicate by REWRITTEN text — catch «same news, different words» duplicates
+    published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=48)
+    if _is_similar_to_any(rewritten, published_rewritten):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
+        return
 
     await _db.update_post_rewrite(post_id, rewritten)
 

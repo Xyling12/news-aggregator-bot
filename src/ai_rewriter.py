@@ -526,12 +526,16 @@ class AIRewriter:
         """Check if AI response is a refusal/safety-filter message."""
         if not text:
             return True
-        text_lower = text.lower().strip()
+        # Normalize ё→е so we don't miss variants like «чём» vs «чем»
+        text_lower = text.lower().strip().replace("ё", "е")
         for phrase in REFUSAL_PHRASES:
-            if phrase in text_lower:
+            phrase_norm = phrase.replace("ё", "е")
+            if phrase_norm in text_lower:
                 return True
-        # Also reject if response is suspiciously short and generic
-        if len(text_lower) < 80 and ("не могу" in text_lower or "давайте" in text_lower):
+        # Reject if response is suspiciously short and sounds like a refusal
+        if len(text_lower) < 120 and any(w in text_lower for w in (
+            "не могу", "давайте", "не буду", "отказываюсь", "невозможно",
+        )):
             return True
         return False
 

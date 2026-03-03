@@ -245,6 +245,38 @@ class Database:
         rows = await cursor.fetchall()
         return [row["original_text"] for row in rows]
 
+    async def get_texts_by_status(self, statuses: List[str], hours: int = 48, limit: int = 100) -> List[str]:
+        """Get original texts of posts with specified statuses within a time window.
+        Used for deduplication of incoming posts against queue and published posts.
+        """
+        placeholders = ",".join("?" * len(statuses))
+        cursor = await self._db.execute(
+            f"""SELECT original_text FROM posts
+               WHERE status IN ({placeholders})
+               AND created_at > datetime('now', ?)
+               ORDER BY created_at DESC LIMIT ?""",
+            (*statuses, f"-{hours} hours", limit),
+        )
+        rows = await cursor.fetchall()
+        return [row["original_text"] for row in rows]
+
+    async def get_rewritten_texts_by_status(self, statuses: List[str], hours: int = 48, limit: int = 100) -> List[str]:
+        """Get rewritten texts of posts with specified statuses within a time window.
+        Used for second-level deduplication after AI rewrite — catches same news rewritten differently.
+        """
+        placeholders = ",".join("?" * len(statuses))
+        cursor = await self._db.execute(
+            f"""SELECT rewritten_text FROM posts
+               WHERE status IN ({placeholders})
+               AND rewritten_text IS NOT NULL
+               AND created_at > datetime('now', ?)
+               ORDER BY created_at DESC LIMIT ?""",
+            (*statuses, f"-{hours} hours", limit),
+        )
+        rows = await cursor.fetchall()
+        return [row["rewritten_text"] for row in rows]
+
+
     # ── Published ────────────────────────────────────────────────────────
 
     async def add_published(self, post_id: int, channel_message_id: int):
