@@ -60,7 +60,7 @@ class Config:
     pexels_api_key: str = ""
 
     # Settings
-    min_text_length: int = 100
+    min_text_length: int = 50
     check_interval: int = 60
     language: str = "ru"
     publish_interval: int = 900  # Auto-publish interval in seconds (default 15min)
