@@ -19,6 +19,7 @@ from src.bot import create_bot, process_new_post, auto_publish_loop
 from src.content_generator import ContentGenerator
 from src.content_scheduler import ContentScheduler
 from src.vk_publisher import VKPublisher
+from src.max_publisher import MAXPublisher
 
 # Logging setup
 logging.basicConfig(
@@ -96,6 +97,15 @@ async def main():
     bot_module._vk_publisher = vk_pub
     if vk_pub.enabled:
         logger.info(f"VK crossposting enabled for group {config.vk_group_id}")
+
+    # Create MAX publisher
+    max_pub = MAXPublisher(
+        bot_token=config.max_bot_token,
+        chat_id=config.max_chat_id,
+    )
+    bot_module._max_publisher = max_pub
+    if max_pub.enabled:
+        logger.info(f"MAX crossposting enabled for chat {config.max_chat_id}")
 
     # Create channel monitor
     monitor = ChannelMonitor(config, db)

@@ -51,6 +51,7 @@ _media_processor: Optional[MediaProcessor] = None
 _bot: Optional[Bot] = None
 _content_scheduler = None  # Set by main.py after init
 _vk_publisher = None  # Set by main.py after init
+_max_publisher = None  # Set by main.py after init
 
 
 def is_admin(user_id: int) -> bool:
@@ -1057,6 +1058,14 @@ async def _publish_post(post: dict) -> bool:
                 await _vk_publisher.publish(text, photo_url=vk_photo)
             except Exception as vk_err:
                 logger.warning(f"VK crosspost failed for post #{post['id']}: {vk_err}")
+
+        # MAX crosspost
+        if _max_publisher and _max_publisher.enabled:
+            try:
+                max_photo = replacement_url or media_url or None
+                await _max_publisher.publish(text, photo_url=max_photo)
+            except Exception as max_err:
+                logger.warning(f"MAX crosspost failed for post #{post['id']}: {max_err}")
 
         return True
 

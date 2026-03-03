@@ -51,6 +51,10 @@ class Config:
     vk_access_token: str = ""
     vk_group_id: str = ""
 
+    # Optional: MAX crossposting
+    max_bot_token: str = ""
+    max_chat_id: str = ""
+
     # Optional: Pexels API (better Russian stock photos)
     pexels_api_key: str = ""
 
@@ -125,6 +129,8 @@ class Config:
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
             vk_access_token=os.getenv("VK_ACCESS_TOKEN", ""),
             vk_group_id=os.getenv("VK_GROUP_ID", ""),
+            max_bot_token=os.getenv("MAX_BOT_TOKEN", ""),
+            max_chat_id=os.getenv("MAX_CHAT_ID", ""),
             pexels_api_key=os.getenv("PEXELS_API_KEY", ""),
             min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "100")),
             check_interval=int(os.getenv("CHECK_INTERVAL", "60")),
