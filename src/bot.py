@@ -1106,24 +1106,26 @@ async def process_new_post(post_id: int):
             logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
             return
 
-    # Step 0c: Deduplication — skip if similar post already exists
+    # Step 0c: Deduplication — skip if SAME news already exists from another channel
+    # Only reject TRUE duplicates, not just news on similar topics
     recent_texts = await _db.get_recent_texts(hours=24)
     for existing_text in recent_texts:
         if existing_text == original_text:
             continue
-        # Method 1: Text similarity (catches rewording of same text)
+        # Method 1: Text similarity (catches same text from different sources)
         similarity = 1.0 - _rewriter.calculate_uniqueness(original_text, existing_text)
-        if similarity > 0.45:
+        if similarity > 0.65:  # High threshold: only near-identical texts
             await _db.update_post_status(post_id, "rejected")
             logger.info(f"Post #{post_id} rejected: duplicate text (similarity {similarity:.0%})")
             return
-        # Method 2: Keyword overlap (catches same story from different sources)
+        # Method 2: Keyword overlap (catches same story rephrased)
         import re as _re
-        words1 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', original_text.lower()) if len(w) > 4)
-        words2 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', existing_text.lower()) if len(w) > 4)
-        if words1 and words2:
+        # Use longer words (6+) to avoid false positives from common regional words
+        words1 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', original_text.lower()) if len(w) > 5)
+        words2 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', existing_text.lower()) if len(w) > 5)
+        if words1 and words2 and len(words1) >= 5 and len(words2) >= 5:
             overlap = len(words1 & words2) / min(len(words1), len(words2))
-            if overlap > 0.6:
+            if overlap > 0.75:  # High threshold: only near-identical topics
                 await _db.update_post_status(post_id, "rejected")
                 logger.info(f"Post #{post_id} rejected: duplicate topic (keyword overlap {overlap:.0%})")
                 return
