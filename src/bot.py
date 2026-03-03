@@ -922,7 +922,11 @@ async def _send_review_post(chat_id: int, post: dict):
     """Send a post for admin review with moderation buttons."""
     original = _escape_html(_truncate(post["original_text"], 300))
     rewritten = post.get("rewritten_text") or "⏳ Ещё не переписан"
-    rewritten_display = _escape_html(_truncate(rewritten, 500))
+    # Preserve <b> tags in rewritten text for proper rendering
+    rewritten_safe = _truncate(rewritten, 500)
+    # Escape & < > but then restore <b> and </b> tags
+    rewritten_display = _escape_html(rewritten_safe)
+    rewritten_display = rewritten_display.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
 
     status = _status_emoji(post["status"])
     source = post["source_channel"]
