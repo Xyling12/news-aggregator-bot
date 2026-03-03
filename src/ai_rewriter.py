@@ -167,10 +167,12 @@ class AIRewriter:
             try:
                 genai.configure(api_key=self.config.gemini_api_key)
                 # Multiple models — each has separate free tier quota
+                # Updated March 2026: gemini-1.5-flash is deprecated (404)
                 model_names = [
-                    "gemini-2.0-flash",
-                    "gemini-1.5-flash",
-                    "gemini-1.5-flash-8b",
+                    "gemini-2.0-flash",           # Primary: fast, free tier
+                    "gemini-2.0-flash-lite",       # Fallback: lighter version
+                    "gemini-2.5-pro-exp-03-25",    # Fallback: experimental but available
+                    "gemini-1.5-flash-latest",     # Last resort: 1.5 via latest alias
                 ]
                 for name in model_names:
                     try:
