@@ -1,196 +1,287 @@
 """
-VK Publisher — crossposting to VK community wall.
-Uses VK API v5.199 to publish posts with photos.
+VK Publisher — cross-posts news to VKontakte community wall.
+Uses VK API to publish text and photo posts.
 """
 
 import asyncio
 import logging
-import os
 import re
+import os
+import tempfile
 from typing import Optional
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
-VK_API_VERSION = "5.199"
-VK_API_BASE = "https://api.vk.com/method"
-
 
 class VKPublisher:
-    """Publishes posts to a VK community wall."""
+    """Publishes posts to a VKontakte community (group/public page)."""
+
+    API_VERSION = "5.199"
+    API_BASE = "https://api.vk.com/method"
 
     def __init__(self, access_token: str, group_id: str):
-        """
-        Args:
-            access_token: VK community access token
-            group_id: Numeric group ID (without minus sign)
-        """
         self.access_token = access_token
-        self.group_id = str(group_id).lstrip("-")
-        self._enabled = bool(access_token and group_id)
+        self.group_id = group_id.replace("club", "")  # Strip "club" prefix if present
+        self._session: Optional[aiohttp.ClientSession] = None
 
-        if self._enabled:
-            logger.info(f"VK Publisher initialized for group {self.group_id}")
-        else:
-            logger.warning("VK Publisher disabled: missing token or group_id")
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if not self._session or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
 
-    def _clean_html_for_vk(self, text: str) -> str:
-        """Convert HTML formatting to VK-compatible plain text and swap footer."""
-        # Replace <b>text</b> with text in caps or just text
-        text = re.sub(r'<b>(.*?)</b>', r'\1', text)
-        text = re.sub(r'<i>(.*?)</i>', r'\1', text)
-        text = re.sub(r'<a href="(.*?)">(.*?)</a>', r'\2 (\1)', text)
+    def _html_to_vk(self, html_text: str) -> str:
+        """Convert HTML-formatted post to VK-compatible plain text.
+        
+        VK wall posts don't support HTML, so we convert:
+        - <b>text</b> → text (VK doesn't support bold in wall posts)
+        - <a href="url">text</a> → text (url)
+        - <br> → newline
+        - Strip all other tags
+        """
+        text = html_text
+
+        # Convert <a> links to text (url) format
+        text = re.sub(r'<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', r'\2 (\1)', text)
+
+        # Remove <b> tags but keep content
+        text = re.sub(r'</?b>', '', text)
+        text = re.sub(r'</?i>', '', text)
+
+        # Convert <br> to newlines
+        text = re.sub(r'<br\s*/?>', '\n', text)
+
         # Remove any remaining HTML tags
         text = re.sub(r'<[^>]+>', '', text)
-        # Decode HTML entities
-        text = text.replace('&amp;', '&')
-        text = text.replace('&lt;', '<')
-        text = text.replace('&gt;', '>')
-        text = text.replace('&quot;', '"')
 
-        # Remove Telegram-specific footer lines (various formats)
-        text = re.sub(r'\n*📲\s*@\w.*$', '', text.strip(), flags=re.MULTILINE)
-        text = re.sub(r'\n*📩\s*@\w.*$', '', text.strip(), flags=re.MULTILINE)
-        text = re.sub(r'\n*\S*t\.me/\S+.*$', '', text.strip(), flags=re.MULTILINE)
+        # Strip the CTA footer block VK doesn't need — already shown as channel name
+        # Matches lines like "😊 Подписаться в TG ...", "📱 Подписывайтесь ...", "📩 Прислать новость ...", etc.
+        cta_pattern = re.compile(
+            r'\n[😊📱📩🔔💬📢]\s*(Подписа|Прислать|Читайте|IzhevskToday|NewsRussain|t\.me|vk\.com)[^\n]*',
+            re.IGNORECASE | re.UNICODE,
+        )
+        text = cta_pattern.sub('', text)
+
+        # Also strip the separator line before CTA if it's now trailing
+        text = re.sub(r'\n─+\n?$', '', text)
+
+        # Clean up excessive whitespace
+        text = re.sub(r'\n{3,}', '\n\n', text)
         text = text.strip()
-        text += f"\n\n📲 vk.com/club{self.group_id} | 📩 @IzhevskTodayBot"
 
         return text
 
-    async def _upload_photo_from_url(self, photo_url: str) -> Optional[str]:
-        """Download photo from URL and upload to VK. Returns VK attachment string."""
-        if not photo_url:
-            return None
+    async def _api_call(self, method: str, **params) -> Optional[dict]:
+        """Make a VK API call.
+
+        Distinguishes between network-level errors (no connectivity / timeout)
+        and VK API-level errors (bad token, access denied, quota exceeded).
+        """
+        session = await self._get_session()
+
+        params.update({
+            "access_token": self.access_token,
+            "v": self.API_VERSION,
+        })
 
         try:
-            async with aiohttp.ClientSession() as session:
-                # Step 1: Get upload URL from VK
-                params = {
-                    "access_token": self.access_token,
-                    "v": VK_API_VERSION,
-                    "group_id": self.group_id,
-                }
-                async with session.get(
-                    f"{VK_API_BASE}/photos.getWallUploadServer",
-                    params=params,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    data = await resp.json()
-                    if "error" in data:
-                        logger.error(f"VK getWallUploadServer error: {data['error']}")
-                        return None
-                    upload_url = data["response"]["upload_url"]
+            async with session.post(
+                f"{self.API_BASE}/{method}",
+                data=params,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                data = await resp.json()
 
-                # Step 2: Download the photo (follow redirects, detect content type)
-                async with session.get(
-                    photo_url,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                    allow_redirects=True,
-                ) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Failed to download photo: {resp.status} {photo_url[:80]}")
-                        return None
-                    photo_data = await resp.read()
-                    content_type = resp.content_type or "image/jpeg"
-                    # Determine file extension from content-type
-                    ext_map = {
-                        "image/jpeg": "jpg",
-                        "image/jpg": "jpg",
-                        "image/png": "png",
-                        "image/webp": "jpg",  # VK doesn't handle WebP well, rename to jpg
-                        "image/gif": "gif",
-                    }
-                    ext = ext_map.get(content_type.split(";")[0].strip(), "jpg")
-                    # Convert WebP data to just let VK handle it (most modern VK handles it fine)
-                    upload_content_type = "image/jpeg" if "webp" in content_type else content_type.split(";")[0].strip()
+                if "error" in data:
+                    error = data["error"]
+                    error_code = error.get("error_code")
+                    error_msg = error.get("error_msg", "unknown")
+                    # Provide actionable context based on known VK error codes
+                    hint = {
+                        5:  "Invalid access token — check VK_TOKEN",
+                        15: "Access denied — check group admin rights",
+                        100: "Invalid parameter passed to VK API",
+                        214: "Post rejected by VK moderation",
+                    }.get(error_code, "")
+                    logger.error(
+                        f"VK API error [{method}] code={error_code} msg='{error_msg}'"
+                        + (f" | hint: {hint}" if hint else "")
+                    )
+                    return None
 
-                # Step 3: Upload to VK
-                form = aiohttp.FormData()
-                form.add_field("photo", photo_data, filename=f"photo.{ext}", content_type=upload_content_type)
-                async with session.post(upload_url, data=form, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    upload_result = await resp.json()
-                    if not upload_result.get("photo") or upload_result["photo"] == "[]":
-                        logger.error("VK photo upload returned empty")
-                        return None
+                return data.get("response")
 
-                # Step 4: Save photo on VK wall
-                save_params = {
-                    "access_token": self.access_token,
-                    "v": VK_API_VERSION,
-                    "group_id": self.group_id,
-                    "photo": upload_result["photo"],
-                    "server": upload_result["server"],
-                    "hash": upload_result["hash"],
-                }
-                async with session.get(
-                    f"{VK_API_BASE}/photos.saveWallPhoto",
-                    params=save_params,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    save_data = await resp.json()
-                    if "error" in save_data:
-                        logger.error(f"VK saveWallPhoto error: {save_data['error']}")
-                        return None
-                    photo = save_data["response"][0]
-                    return f"photo{photo['owner_id']}_{photo['id']}"
-
-        except Exception as e:
-            logger.error(f"VK photo upload failed: {e}")
+        except asyncio.TimeoutError:
+            logger.error(f"VK API timeout [{method}] — request exceeded 30s")
             return None
+        except aiohttp.ClientError as e:
+            logger.error(f"VK API network error [{method}]: {type(e).__name__}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"VK API unexpected error [{method}]: {type(e).__name__}: {e}")
+            return None
+
+    async def _upload_photo(self, photo_url: str) -> Optional[str]:
+        """Download a photo from URL and upload it to VK.
+        
+        Returns VK photo attachment string like 'photo-123_456' or None on failure.
+        """
+        session = await self._get_session()
+
+        # Step 1: Get upload server URL
+        upload_server = await self._api_call(
+            "photos.getWallUploadServer",
+            group_id=self.group_id,
+        )
+        if not upload_server:
+            return None
+
+        upload_url = upload_server.get("upload_url")
+        if not upload_url:
+            return None
+
+        # Step 2: Download the photo from source URL
+        try:
+            async with session.get(photo_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    logger.error(f"Photo download failed: HTTP {resp.status} from {photo_url}")
+                    return None
+                photo_data = await resp.read()
+        except asyncio.TimeoutError:
+            logger.error(f"Photo download timeout (>30s): {photo_url}")
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f"Photo download network error: {type(e).__name__}: {e}")
+            return None
+
+        # Step 3: Upload to VK
+        try:
+            form = aiohttp.FormData()
+            form.add_field(
+                "photo",
+                photo_data,
+                filename="photo.jpg",
+                content_type="image/jpeg",
+            )
+
+            async with session.post(
+                upload_url,
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                upload_result = await resp.json()
+
+            if not upload_result.get("photo") or upload_result["photo"] == "[]":
+                logger.error("VK photo upload: server returned empty photo field — "
+                             "file may be too large or in unsupported format")
+                return None
+
+        except asyncio.TimeoutError:
+            logger.error("VK photo upload timeout — server took >30s")
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f"VK photo upload network error: {type(e).__name__}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"VK photo upload unexpected error: {type(e).__name__}: {e}")
+            return None
+
+        # Step 4: Save the uploaded photo
+        save_result = await self._api_call(
+            "photos.saveWallPhoto",
+            group_id=self.group_id,
+            photo=upload_result["photo"],
+            server=upload_result["server"],
+            hash=upload_result["hash"],
+        )
+
+        if save_result and len(save_result) > 0:
+            photo = save_result[0]
+            attachment = f"photo{photo['owner_id']}_{photo['id']}"
+            logger.info(f"VK photo uploaded: {attachment}")
+            return attachment
+
+        return None
 
     async def publish(
         self,
         text: str,
         photo_url: Optional[str] = None,
-        local_photo_path: Optional[str] = None,
     ) -> Optional[int]:
         """
-        Publish a post to VK community wall.
-        Returns the post ID on success, None on failure.
+        Publish a post to the VK community wall.
+        
+        Args:
+            text: HTML-formatted post text (will be converted to plain text)
+            photo_url: Optional URL of a photo to attach
+            
+        Returns:
+            VK post_id on success, None on failure
         """
-        if not self._enabled:
-            return None
+        # Convert HTML to VK-compatible text
+        vk_text = self._html_to_vk(text)
 
-        # Clean text for VK (remove HTML)
-        vk_text = self._clean_html_for_vk(text)
+        # Truncate to VK wall post limit (16384 chars)
+        if len(vk_text) > 16000:
+            vk_text = vk_text[:16000] + "..."
 
-        # Upload photo if available
-        attachment = None
-        source_url = photo_url or local_photo_path
+
+
+        # Add clean VK footer with native hyperlinks (shown as clickable words, not raw URLs)
+        vk_text += (
+            "\n\n"
+            "[https://t.me/IzhevskTodayNews|📱 Telegram-канал] | "
+            "[https://vk.com/im?sel=-236380336|📩 Прислать новость в ВК]"
+        )
+
+        params = {
+            "owner_id": f"-{self.group_id}",
+            "from_group": 1,
+            "message": vk_text,
+        }
+
+        # Upload and attach photo if available
         if photo_url:
-            attachment = await self._upload_photo_from_url(photo_url)
+            attachment = await self._upload_photo(photo_url)
+            if attachment:
+                params["attachments"] = attachment
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                params = {
-                    "access_token": self.access_token,
-                    "v": VK_API_VERSION,
-                    "owner_id": f"-{self.group_id}",
-                    "from_group": 1,
-                    "message": vk_text[:16000],  # VK wall limit
-                }
-                if attachment:
-                    params["attachments"] = attachment
+        result = await self._api_call("wall.post", **params)
 
-                async with session.get(
-                    f"{VK_API_BASE}/wall.post",
-                    params=params,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    data = await resp.json()
-                    if "error" in data:
-                        logger.error(f"VK wall.post error: {data['error']}")
-                        return None
+        if result and "post_id" in result:
+            logger.info(
+                f"VK post published: vk.com/wall-{self.group_id}_{result['post_id']}"
+            )
+            return result["post_id"]
 
-                    post_id = data["response"]["post_id"]
-                    logger.info(f"✅ VK post published: {post_id}")
-                    return post_id
+        logger.error("VK publish failed: no post_id in response")
+        return None
 
-        except Exception as e:
-            logger.error(f"VK publish failed: {e}")
-            return None
+    async def test_connection(self) -> dict:
+        """Test VK API connection and return group info."""
+        result = {
+            "status": "error",
+            "group_id": self.group_id,
+            "token_set": bool(self.access_token),
+        }
+
+        # Try to get group info
+        groups = await self._api_call(
+            "groups.getById",
+            group_id=self.group_id,
+        )
+
+        if groups:
+            group = groups.get("groups", groups)
+            if isinstance(group, list) and group:
+                group = group[0]
+            result["status"] = "ok"
+            result["group_name"] = group.get("name", "unknown")
+            result["group_url"] = f"https://vk.com/club{self.group_id}"
+
+        return result

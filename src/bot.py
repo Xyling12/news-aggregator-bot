@@ -5,7 +5,13 @@ Telegram Bot — Aiogram 3 bot for admin moderation, post management, and publis
 import asyncio
 import logging
 import os
+import re
+import traceback
+from datetime import datetime as dt
 from typing import Optional
+
+import aiohttp
+import google.generativeai as genai
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
@@ -24,6 +30,17 @@ from src.config import Config
 from src.database import Database
 from src.ai_rewriter import AIRewriter
 from src.media_processor import MediaProcessor
+from src.vk_publisher import VKPublisher
+from src.utils import (
+    escape_html,
+    clean_text,
+    word_overlap,
+    is_similar_to_any,
+    detect_rubric,
+    format_post,
+    RUBRIC_MAP,
+    BREAKING_KEYWORDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +65,8 @@ _config: Optional[Config] = None
 _db: Optional[Database] = None
 _rewriter: Optional[AIRewriter] = None
 _media_processor: Optional[MediaProcessor] = None
+_vk_publisher: Optional[VKPublisher] = None
 _bot: Optional[Bot] = None
-_content_scheduler = None  # Set by main.py after init
-_vk_publisher = None  # Set by main.py after init
-_max_publisher = None  # Set by main.py after init
 
 
 def is_admin(user_id: int) -> bool:
@@ -154,26 +169,6 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Отменено.")
 
-@router.message(Command("clear_queue"))
-async def cmd_clear_queue(message: Message):
-    """Reject all pending/review posts to start fresh with current news."""
-    if not is_admin(message.from_user.id):
-        return
-
-    await message.answer("🗑 Очищаю очередь...")
-    count = 0
-    for status in ("pending", "review", "rewriting"):
-        posts = await _db.get_posts_by_status(status, limit=200)
-        for post in posts:
-            await _db.update_post_status(post["id"], "rejected")
-            count += 1
-
-    await message.answer(
-        f"✅ Очередь очищена! Отклонено постов: {count}\n\n"
-        f"Бот начнёт собирать актуальные новости с нуля."
-    )
-
-
 
 @router.message(SendNewsStates.waiting_for_news)
 async def process_user_news(message: Message, state: FSMContext):
@@ -215,6 +210,81 @@ async def process_user_news(message: Message, state: FSMContext):
         "✅ Спасибо! Ваша новость отправлена редакции.\n"
         "Если она интересная — мы опубликуем её на канале @IzhevskTodayNews!",
     )
+
+
+# ── Chat Moderation ──────────────────────────────────────────────────────────
+
+_MOD_RULES = [
+    ("реклама/спам", [
+        "куп", "продам", "продаю", "скидка", "акция", "промокод", "заработ",
+        "инвестиц", "крипт", "биткоин", "казино", "ставк", "букмекер",
+    ]),
+    ("наркотики", [
+        "мефедрон", "амфетамин", "героин", "кокаин", "гашиш", "марихуан",
+        "спайс", "закладк", "нарк", "вещества",
+    ]),
+    ("политика/экстремизм", [
+        "путин х", "слава украине", "хохол", "кацап", "нацист", "фашист",
+        "долой власть", "свергнуть", "митинг организуем", "протест организуем",
+    ]),
+]
+_LINK_PAT = re.compile(r'(https?://|t\.me/|vk\.com/|telegram\.me/|bit\.ly/)', re.IGNORECASE)
+
+
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def chat_moderation(message: Message):
+    """Auto-delete rule-breaking messages in discussion chat."""
+    text = (message.text or message.caption or "").lower()
+    if not text:
+        return
+
+    violated = None
+    if _LINK_PAT.search(text):
+        violated = "ссылки"
+    if not violated:
+        for category, keywords in _MOD_RULES:
+            if any(kw in text for kw in keywords):
+                violated = category
+                break
+
+    if violated:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        try:
+            warn = await message.answer(
+                f"⛔ Сообщение удалено ({violated}). Соблюдайте правила чата."
+            )
+            await asyncio.sleep(10)
+            await warn.delete()
+        except Exception:
+            pass
+
+
+@router.message(
+    F.chat.type.in_({"group", "supergroup"}),
+    F.or_(
+        F.new_chat_members,
+        F.left_chat_member,
+        F.new_chat_title,
+        F.new_chat_photo,
+        F.delete_chat_photo,
+        F.group_chat_created,
+        F.supergroup_chat_created,
+        F.message_auto_delete_timer_changed,
+        F.pinned_message,
+        F.video_chat_started,
+        F.video_chat_ended,
+        F.video_chat_participants_invited,
+    )
+)
+async def delete_service_messages(message: Message):
+    """Silently delete Telegram system/service messages to keep chat clean."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 @router.message(Command("queue"))
@@ -299,33 +369,31 @@ async def cmd_test_gemini(message: Message):
     if not is_admin(message.from_user.id):
         return
 
-    import traceback
     lines = []
-    
+
     # Check 1: API key
     key = _config.gemini_api_key if _config else "NO CONFIG"
     lines.append(f"🔑 API Key: {'SET (' + key[:10] + '...)' if key else '❌ NOT SET'}")
-    
+
     # Check 2: Model
     if _rewriter and _rewriter._gemini_model:
         lines.append("🤖 Model: ✅ initialized")
     else:
         lines.append("🤖 Model: ❌ NOT initialized")
-    
+
     # Check 3: Try actual API call
     try:
-        import google.generativeai as genai
         genai.configure(api_key=_config.gemini_api_key)
         model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content("Скажи одно слово: привет")
         if response and response.text:
             lines.append(f"📡 API Call: ✅ OK — '{response.text.strip()[:50]}'")
         else:
-            lines.append(f"📡 API Call: ❌ Empty response")
+            lines.append("📡 API Call: ❌ Empty response")
             if hasattr(response, 'candidates'):
                 lines.append(f"   Candidates: {response.candidates}")
     except Exception as e:
-        lines.append(f"📡 API Call: ❌ ERROR")
+        lines.append("📡 API Call: ❌ ERROR")
         lines.append(f"   {type(e).__name__}: {str(e)[:200]}")
         lines.append(f"   Traceback: {traceback.format_exc()[-300:]}")
 
@@ -338,8 +406,6 @@ async def cmd_test_ai(message: Message):
     if not is_admin(message.from_user.id):
         return
 
-    import traceback
-    import aiohttp
     lines = ["🔍 **Тест всех AI-движков:**\n"]
 
     # Test 1: Gemini
@@ -394,7 +460,7 @@ async def cmd_test_ai(message: Message):
 
 @router.message(Command("publish"))
 async def cmd_publish(message: Message):
-    """Publish all approved posts."""
+    """Publish all approved posts with delays between them."""
     if not is_admin(message.from_user.id):
         return
 
@@ -403,14 +469,19 @@ async def cmd_publish(message: Message):
         await message.answer("📭 Нет одобренных постов для публикации.")
         return
 
+    total = len(approved)
+    await message.answer(f"📢 Начинаю публикацию {total} постов с интервалом 30 сек...")
+
     published_count = 0
-    for post in approved:
+    for i, post in enumerate(approved):
         success = await _publish_post(post)
         if success:
             published_count += 1
-        await asyncio.sleep(1)  # Rate limit
+        # Don't sleep after the last post
+        if i < total - 1:
+            await asyncio.sleep(30)  # 30 seconds between posts to avoid flooding
 
-    await message.answer(f"📢 Опубликовано постов: {published_count}/{len(approved)}")
+    await message.answer(f"✅ Опубликовано: {published_count}/{total}")
 
 
 @router.message(Command("report"))
@@ -494,79 +565,26 @@ async def cb_sources(callback: CallbackQuery):
 
 @router.callback_query(F.data == "settings")
 async def cb_settings(callback: CallbackQuery):
-    """Settings button handler — interactive with change buttons."""
+    """Settings button handler."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа", show_alert=True)
         return
 
     await callback.answer()
-    await _send_settings_menu(callback.message.chat.id)
-
-
-async def _send_settings_menu(chat_id: int):
-    """Send the interactive settings menu."""
-    pub_min = _config.publish_interval // 60
     text = (
         f"⚙️ <b>Настройки бота</b>\n\n"
         f"📡 Источников: <b>{len(_config.source_channels)}</b>\n"
-        f"📢 Канал: <b>@{_config.target_channel}</b>\n\n"
-        f"📤 Интервал публикации: <b>{pub_min} мин</b>\n"
         f"⏱ Интервал проверки: <b>{_config.check_interval} сек</b>\n"
+        f"📤 Интервал публикации: <b>{_config.publish_interval // 60} мин</b>\n"
         f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n"
-        f"🤖 Автопубликация: <b>{'✅ ВКЛ' if _config.auto_publish else '⛔ ВЫКЛ'}</b>\n\n"
-        f"🚫 Фильтры: реклама ({len(_config.ad_stop_words)}), "
-        f"мусор ({len(_config.lowvalue_stop_words)}), "
-        f"срочные ({len(_config.breaking_keywords)})\n\n"
-        f"👇 Нажми кнопку, чтобы изменить:"
+        f"🗣 Язык: <b>{_config.language}</b>\n\n"
+        f"🚫 Фильтры:\n"
+        f"  • Реклама: <b>{len(_config.ad_stop_words)} слов</b>\n"
+        f"  • Политика: <b>{len(_config.politics_stop_words)} слов</b>\n"
+        f"  • Срочные новости: <b>{len(_config.breaking_keywords)} слов</b>\n\n"
+        f"📢 Канал: <b>@{_config.target_channel}</b>"
     )
-
-    # Mark current values with ✓
-    def _pub_label(minutes):
-        marker = " ✓" if _config.publish_interval == minutes * 60 else ""
-        return f"{minutes} мин{marker}"
-
-    def _chk_label(seconds):
-        marker = " ✓" if _config.check_interval == seconds else ""
-        return f"{seconds} сек{marker}"
-
-    def _len_label(chars):
-        marker = " ✓" if _config.min_text_length == chars else ""
-        return f"{chars}{marker}"
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        # Publish interval row
-        [InlineKeyboardButton(text="📤 Публикация:", callback_data="noop")],
-        [
-            InlineKeyboardButton(text=_pub_label(30), callback_data="set_pub:1800"),
-            InlineKeyboardButton(text=_pub_label(60), callback_data="set_pub:3600"),
-            InlineKeyboardButton(text=_pub_label(120), callback_data="set_pub:7200"),
-            InlineKeyboardButton(text=_pub_label(180), callback_data="set_pub:10800"),
-        ],
-        # Check interval row
-        [InlineKeyboardButton(text="⏱ Проверка каналов:", callback_data="noop")],
-        [
-            InlineKeyboardButton(text=_chk_label(30), callback_data="set_chk:30"),
-            InlineKeyboardButton(text=_chk_label(60), callback_data="set_chk:60"),
-            InlineKeyboardButton(text=_chk_label(120), callback_data="set_chk:120"),
-            InlineKeyboardButton(text=_chk_label(300), callback_data="set_chk:300"),
-        ],
-        # Min text length row
-        [InlineKeyboardButton(text="📏 Мин. длина текста:", callback_data="noop")],
-        [
-            InlineKeyboardButton(text=_len_label(50), callback_data="set_len:50"),
-            InlineKeyboardButton(text=_len_label(100), callback_data="set_len:100"),
-            InlineKeyboardButton(text=_len_label(200), callback_data="set_len:200"),
-            InlineKeyboardButton(text=_len_label(300), callback_data="set_len:300"),
-        ],
-        # Auto-publish toggle
-        [
-            InlineKeyboardButton(
-                text=f"🤖 Автопубликация: {'✅ ВКЛ' if _config.auto_publish else '⛔ ВЫКЛ'} — нажми чтобы переключить",
-                callback_data="toggle_autopub",
-            )
-        ],
-    ])
-    await _bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "add_source")
@@ -727,45 +745,16 @@ async def cb_search_photo(callback: CallbackQuery):
     if not post:
         return
 
-    # Extract keywords: Method 1 — AI
+    # Extract keywords
     text = post.get("rewritten_text") or post["original_text"]
-    original_text = post["original_text"]
     keywords = await _rewriter.generate_keywords(text)
 
-    # Method 2: Simple keyword extraction from text (fallback)
     if not keywords:
-        import re as _re
-        common = {'который', 'которая', 'которые', 'однако', 'несколько', 'сообщил', 'сообщила',
-                  'сообщили', 'рассказал', 'рассказала', 'отметил', 'отметила', 'заявил',
-                  'является', 'составил', 'составила', 'сделать', 'поэтому', 'например',
-                  'очередной', 'основных', 'обратить', 'сегодня', 'которое', 'связано',
-                  'получить', 'возможно', 'подробнее', 'источник', 'подписать', 'читайте'}
-        words = _re.findall(r'[а-яёА-ЯЁ]{6,}', original_text)
-        unique_words = []
-        seen = set()
-        for w in words:
-            wl = w.lower()
-            if wl not in common and wl not in seen:
-                seen.add(wl)
-                unique_words.append(wl)
-                if len(unique_words) >= 3:
-                    break
-        if unique_words:
-            keywords = unique_words
-            logger.info(f"Photo search: using text-extracted keywords: {keywords}")
-
-    # Method 3: Generic fallback
-    if not keywords:
-        keywords = ["city news", "Izhevsk Russia", "urban life"]
-        logger.info("Photo search: using generic fallback keywords")
+        await callback.message.reply("❌ Не удалось извлечь ключевые слова для поиска.")
+        return
 
     # Search stock photos
     photos = await _media_processor.search_stock_photo(keywords, count=3)
-
-    # Generic retry if specific keywords found nothing
-    if not photos and keywords != ["city news", "Izhevsk Russia", "urban life"]:
-        photos = await _media_processor.search_stock_photo(["city news", "urban life"], count=3)
-
     if not photos:
         await callback.message.reply(f"📷 Фото не найдены. Ключевые слова: {', '.join(keywords)}")
         return
@@ -825,189 +814,40 @@ async def cb_dismiss(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
 
 
-@router.callback_query(F.data == "noop")
-async def cb_noop(callback: CallbackQuery):
-    """No-op handler for label-only buttons."""
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("set_pub:"))
-async def cb_set_publish_interval(callback: CallbackQuery):
-    """Change publish interval."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-    seconds = int(callback.data.split(":")[1])
-    _config.publish_interval = seconds
-    await _db.set_setting("publish_interval", str(seconds))
-    await callback.answer(f"✅ Интервал публикации: {seconds // 60} мин")
-    # Refresh settings menu
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await _send_settings_menu(callback.message.chat.id)
-
-
-@router.callback_query(F.data.startswith("set_chk:"))
-async def cb_set_check_interval(callback: CallbackQuery):
-    """Change channel check interval."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-    seconds = int(callback.data.split(":")[1])
-    _config.check_interval = seconds
-    await _db.set_setting("check_interval", str(seconds))
-    await callback.answer(f"✅ Интервал проверки: {seconds} сек")
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await _send_settings_menu(callback.message.chat.id)
-
-
-@router.callback_query(F.data.startswith("set_len:"))
-async def cb_set_min_length(callback: CallbackQuery):
-    """Change minimum text length."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-    chars = int(callback.data.split(":")[1])
-    _config.min_text_length = chars
-    await _db.set_setting("min_text_length", str(chars))
-    await callback.answer(f"✅ Мин. длина: {chars} символов")
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await _send_settings_menu(callback.message.chat.id)
-
-
-@router.callback_query(F.data == "toggle_autopub")
-async def cb_toggle_autopub(callback: CallbackQuery):
-    """Toggle auto-publish mode on/off."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-    _config.auto_publish = not _config.auto_publish
-    await _db.set_setting("auto_publish", "true" if _config.auto_publish else "false")
-    status = "✅ ВКЛ — посты публикуются автоматически" if _config.auto_publish else "⛔ ВЫКЛ — посты идут на модерацию"
-    await callback.answer(f"🤖 Автопубликация: {status}", show_alert=True)
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await _send_settings_menu(callback.message.chat.id)
-
-
-# ── Helper Functions ─────────────────────────────────────────────────────
+# ── Helper Functions (thin wrappers for backwards compat) ────────────────────
+# All implementations live in src/utils.py
 
 def _escape_html(text: str) -> str:
-    """Escape HTML special characters in text."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _format_post(text: str, hashtags: list) -> str:
-    """Format post with premium Telegram template and convert markdown to HTML."""
-    import re
-    
-    # Convert **bold** markdown to <b>bold</b> HTML
-    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-    # Remove any leftover markdown headers (# ## ###)
-    text = re.sub(r'^#{1,3}\s*', '', text, flags=re.MULTILINE)
-    
-    lines = text.strip().split("\n")
-    if not lines:
-        return text
-
-    # Build formatted post
-    parts = []
-
-    # Title — Gemini already provides emoji + title, keep as-is
-    parts.append(lines[0].strip())
-    parts.append("")
-
-    # Body text
-    body = "\n".join(lines[1:]).strip()
-    if body:
-        parts.append(body)
-        parts.append("")
-
-    # Hashtags
-    if hashtags:
-        parts.append(" ".join(hashtags))
-        parts.append("")
-
-    # Premium CTA footer (plain text — renders well in both TG and VK)
-    parts.append("📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot")
-
-    return "\n".join(parts)
+    """Escape HTML — delegates to utils.escape_html."""
+    return escape_html(text)
 
 
 def _clean_text(text: str) -> str:
-    """Remove source attribution lines, subscribe links, and external URLs from post text."""
-    import re
-    lines = text.split('\n')
-    cleaned = []
-    skip_patterns = [
-        r'подписаться на',
-        r'подписаться в',        # catches 'подписаться в TG', 'подписаться в ВК'
-        r'подписывайтесь',
-        r'подписаться\s*[|:]',
-        r'подписаться$',
-        r'повестка дня.*на сайте',
-        r'читайте.*на сайте',
-        r'читайте нас',
-        r'читайте.*в\s*(max|макс|vk|вк|дзен)',
-        r'источник:',
-        r'подробнее.*на сайте',
-        r'на нашем сайте',
-        r'наш.*канал',
-        r'присоединяйтесь',
-        r'подробности.*по ссылке',
-        r'ранее.*писал[аи]?',
-        r'прислать новость',
-        r'поделиться новостью',
-        r'купить рекламу',
-        r'пригласить друзей',
-        r'реклама[.:]',
-        r'^\s*https?://',  # standalone URLs
-        r'^\s*t\.me/',
-        r'^\s*@\w+\s*$',  # standalone @mentions
-        r'^\s*[📲😊📩📢🔔💬]\s*(подписа|присла|читай|наш)',  # emoji CTA lines
-    ]
-    for line in lines:
-        line_lower = line.strip().lower()
-        if not line_lower:
-            cleaned.append(line)
-            continue
-        skip = False
-        for pattern in skip_patterns:
-            if re.search(pattern, line_lower):
-                skip = True
-                break
-        if not skip:
-            cleaned.append(line)
-    # Remove trailing empty lines
-    result = '\n'.join(cleaned).rstrip()
-    return result
+    """Clean post text — delegates to utils.clean_text."""
+    return clean_text(text)
+
+
+def _format_post(text: str, hashtags: list) -> str:
+    """Format post — delegates to utils.format_post."""
+    return format_post(text, hashtags)
+
+
+def _is_similar_to_any(text: str, candidates: list) -> bool:
+    """Deduplication check — delegates to utils.is_similar_to_any."""
+    return is_similar_to_any(text, candidates, _rewriter)
 
 
 async def _send_review_post(chat_id: int, post: dict):
     """Send a post for admin review with moderation buttons."""
     original = _escape_html(_truncate(post["original_text"], 300))
     rewritten = post.get("rewritten_text") or "⏳ Ещё не переписан"
-    # Preserve <b> tags in rewritten text for proper rendering
-    rewritten_safe = _truncate(rewritten, 500)
-    # Escape & < > but then restore <b> and </b> tags
-    rewritten_display = _escape_html(rewritten_safe)
-    rewritten_display = rewritten_display.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+    # Don't escape rewritten text — it contains intentional HTML from _format_post (<b>, <a>)
+    rewritten_display = _truncate(rewritten, 500)
 
     status = _status_emoji(post["status"])
     source = post["source_channel"]
 
     # Format date as d.m.Y H:M
-    from datetime import datetime as dt
     try:
         created = dt.fromisoformat(str(post['created_at']))
         date_str = created.strftime("%d.%m.%Y %H:%M")
@@ -1094,19 +934,13 @@ async def _publish_post(post: dict) -> bool:
                 photo_source = media_url
 
             if photo_source:
-                try:
-                    msg = await _bot.send_photo(
-                        target,
-                        photo=photo_source,
-                        caption=text[:1024],
-                        parse_mode=ParseMode.HTML,
-                    )
-                except Exception as photo_err:
-                    logger.warning(f"Photo send failed ({photo_err}), publishing as text")
-                    photo_source = None
-
-            if not photo_source:
-                # Fallback: publish as text if photo unavailable
+                msg = await _bot.send_photo(
+                    target,
+                    photo=photo_source,
+                    caption=text[:1024],
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
                 msg = await _bot.send_message(
                     target,
                     text[:4096],
@@ -1125,24 +959,20 @@ async def _publish_post(post: dict) -> bool:
 
         logger.info(f"Published post #{post['id']} to {target}")
 
-        # VK crosspost — only use real downloadable URLs, NOT Telegram file_ids
-        if _vk_publisher and _vk_publisher.enabled:
+        # Cross-post to VK
+        if _vk_publisher:
             try:
-                # replacement_url is a real Unsplash/Pexels URL — safe for VK
-                # media_url is a Telegram file_id — VK cannot download it, skip it
-                vk_photo = replacement_url or None
-                await _vk_publisher.publish(text, photo_url=vk_photo)
-            except Exception as vk_err:
-                logger.warning(f"VK crosspost failed for post #{post['id']}: {vk_err}")
-
-
-        # MAX crosspost
-        if _max_publisher and _max_publisher.enabled:
-            try:
-                max_photo = replacement_url or media_url or None
-                await _max_publisher.publish(text, photo_url=max_photo)
-            except Exception as max_err:
-                logger.warning(f"MAX crosspost failed for post #{post['id']}: {max_err}")
+                photo_for_vk = post.get("replacement_media_url") or post.get("media_file_id")
+                # Fallback: use a generic Izhevsk news image if no photo is available
+                if not photo_for_vk:
+                    photo_for_vk = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&q=80"
+                vk_post_id = await _vk_publisher.publish(text, photo_url=photo_for_vk)
+                if vk_post_id:
+                    logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
+                else:
+                    logger.warning(f"Post #{post['id']} VK crosspost failed")
+            except Exception as e:
+                logger.error(f"VK crosspost error for post #{post['id']}: {e}")
 
         return True
 
@@ -1170,11 +1000,11 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: ad/spam (matched: {', '.join(ad_matches[:3])})")
         return
 
-    # Step 0a3: Low-value content filter — skip weather, horoscopes, etc.
-    lowvalue_matches = [w for w in _config.lowvalue_stop_words if w in text_lower]
-    if len(lowvalue_matches) >= 1:  # Even 1 match = low-value (these are very specific)
+    # Step 0a2: Politics filter — skip political posts
+    politics_matches = [w for w in _config.politics_stop_words if w in text_lower]
+    if len(politics_matches) >= 2:  # 2+ political keywords = politics
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: low-value content (matched: {', '.join(lowvalue_matches[:3])})")
+        logger.info(f"Post #{post_id} rejected: politics (matched: {', '.join(politics_matches[:3])})")
         return
 
     # Step 0b: Relevance filter for federal channels
@@ -1189,29 +1019,20 @@ async def process_new_post(post_id: int):
             logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
             return
 
-    # Step 0c: Deduplication — skip if SAME news already exists from another channel
-    # Only reject TRUE duplicates, not just news on similar topics
-    recent_texts = await _db.get_recent_texts(hours=24)
-    for existing_text in recent_texts:
-        if existing_text == original_text:
-            continue
-        # Method 1: Text similarity (catches same text from different sources)
-        similarity = 1.0 - _rewriter.calculate_uniqueness(original_text, existing_text)
-        if similarity > 0.65:  # High threshold: only near-identical texts
-            await _db.update_post_status(post_id, "rejected")
-            logger.info(f"Post #{post_id} rejected: duplicate text (similarity {similarity:.0%})")
-            return
-        # Method 2: Keyword overlap (catches same story rephrased)
-        import re as _re
-        # Use longer words (6+) to avoid false positives from common regional words
-        words1 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', original_text.lower()) if len(w) > 5)
-        words2 = set(w for w in _re.findall(r'[а-яёa-z0-9]+', existing_text.lower()) if len(w) > 5)
-        if words1 and words2 and len(words1) >= 5 and len(words2) >= 5:
-            overlap = len(words1 & words2) / min(len(words1), len(words2))
-            if overlap > 0.75:  # High threshold: only near-identical topics
-                await _db.update_post_status(post_id, "rejected")
-                logger.info(f"Post #{post_id} rejected: duplicate topic (keyword overlap {overlap:.0%})")
-                return
+    # Step 0c: Deduplication — smart two-tier check
+    # Tier 1: Compare against PUBLISHED posts (last 48h) — don't repeat what's already on the channel
+    published_texts = await _db.get_texts_by_status(["published"], hours=48)
+    if _is_similar_to_any(original_text, published_texts):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: similar to published post")
+        return
+
+    # Tier 2: Compare against QUEUED posts (approved) — first-in-queue wins, later duplicates rejected
+    queued_texts = await _db.get_texts_by_status(["approved", "rewriting"], hours=24)
+    if _is_similar_to_any(original_text, queued_texts):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: similar post already in queue")
+        return
 
     # Step 0d: Breaking news detection — auto-publish without moderation
     is_breaking = any(kw in text_lower for kw in _config.breaking_keywords)
@@ -1220,25 +1041,13 @@ async def process_new_post(post_id: int):
     await _db.update_post_status(post_id, "rewriting")
     rewritten, engine = await _rewriter.rewrite(original_text)
 
-    if not rewritten:
-        # All AI engines failed — silently reject the post
-        await _db.update_post_status(post_id, "rejected")
-        logger.warning(f"Post #{post_id}: all AI engines failed — post silently rejected")
-        return
-
-    rewritten = _clean_text(rewritten)  # Clean AI output too
-
-    # 🛡️ Double safety: catch ANY refusal text that slipped through engine filters
-    from src.ai_rewriter import REFUSAL_PHRASES
-    rewritten_lower = rewritten.lower()
-    for phrase in REFUSAL_PHRASES:
-        if phrase in rewritten_lower:
-            await _db.update_post_status(post_id, "rejected")
-            logger.warning(f"Post #{post_id}: refusal text detected after rewrite — silently rejected. Phrase: '{phrase}'")
-            return
-
-    uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
-    logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
+    if rewritten:
+        rewritten = _clean_text(rewritten)  # Clean AI output too
+        uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
+        logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
+    else:
+        rewritten = original_text
+        logger.warning(f"Post #{post_id}: AI rewrite failed, using original text")
 
     # Step 2: Generate hashtags
     hashtags = await _rewriter.generate_hashtags(rewritten)
@@ -1248,76 +1057,17 @@ async def process_new_post(post_id: int):
 
     await _db.update_post_rewrite(post_id, rewritten)
 
-    # Step 3: Find unique stock photo (EVERY post must have a photo)
-    stock_url = None
+    # Step 3: Find unique stock photo (always try for unique content)
     try:
-        # Method 1: AI-generated keywords
         keywords = await _rewriter.generate_keywords(original_text)
         if keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords)
             if stock_photos:
                 stock_url = stock_photos[0]["url"]
-                logger.info(f"Post #{post_id}: stock photo found (AI keywords: {' '.join(keywords)})")
+                await _db.update_post_media(post_id, replacement_url=stock_url)
+                logger.info(f"Post #{post_id}: stock photo found for '{' '.join(keywords)}'")
     except Exception as e:
-        logger.warning(f"Post #{post_id}: AI keyword generation failed: {e}")
-
-    # Method 2: Simple keyword extraction (fallback if AI unavailable)
-    if not stock_url:
-        try:
-            import re as _re
-            # Extract long meaningful words from text
-            words = _re.findall(r'[а-яёА-ЯЁ]{6,}', original_text)
-            # Pick top unique words (skip common ones)
-            common = {'который', 'которая', 'которые', 'однако', 'несколько', 'сообщил', 'сообщила',
-                      'сообщили', 'рассказал', 'рассказала', 'отметил', 'отметила', 'заявил',
-                      'является', 'составил', 'составила', 'сделать', 'поэтому', 'например',
-                      'очередной', 'основных', 'обратить', 'сегодня', 'которое', 'связано',
-                      'получить', 'возможно', 'подробнее', 'источник', 'подписать', 'читайте'}
-            unique_words = []
-            seen = set()
-            for w in words:
-                wl = w.lower()
-                if wl not in common and wl not in seen:
-                    seen.add(wl)
-                    unique_words.append(wl)
-                    if len(unique_words) >= 3:
-                        break
-            if unique_words:
-                stock_photos = await _media_processor.search_stock_photo(unique_words)
-                if stock_photos:
-                    stock_url = stock_photos[0]["url"]
-                    logger.info(f"Post #{post_id}: stock photo found (text keywords: {' '.join(unique_words)})")
-        except Exception as e2:
-            logger.warning(f"Post #{post_id}: fallback keyword extraction failed: {e2}")
-
-    # Method 3: Generic topic photo (last resort) — randomized pool to avoid repetition
-    if not stock_url:
-        try:
-            import random
-            generic_pool = [
-                "breaking news", "journalism", "press conference",
-                "city hall", "government building", "urban street",
-                "town square", "local event", "community meeting",
-                "russia cityscape", "russia city", "russian architecture",
-                "office workers", "business meeting", "handshake deal",
-                "construction site", "road repair", "new building",
-                "police car", "ambulance street", "fire department",
-                "classroom school", "hospital corridor", "shopping mall interior",
-                "park people walking", "market place", "sports stadium",
-                "traffic cars", "bus stop", "railway station",
-            ]
-            random.shuffle(generic_pool)
-            for query in generic_pool[:4]:
-                stock_photos = await _media_processor.search_stock_photo([query])
-                if stock_photos:
-                    stock_url = stock_photos[0]["url"]
-                    logger.info(f"Post #{post_id}: generic stock photo found ({query})")
-                    break
-        except Exception as e3:
-            logger.warning(f"Post #{post_id}: generic photo search failed: {e3}")
-
-    if stock_url:
-        await _db.update_post_media(post_id, replacement_url=stock_url)
+        logger.error(f"Post #{post_id}: stock photo search failed: {e}")
 
     # Step 3b: Watermark detection on original photo
     if post["media_type"] == "photo" and post.get("media_local_path"):
@@ -1326,17 +1076,13 @@ async def process_new_post(post_id: int):
             await _db.update_post_media(post_id, has_watermark=True)
             logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
 
-    # Step 4: Breaking news or AUTO_PUBLISH → auto-publish, regular → send for review
-    if is_breaking or _config.auto_publish:
-        if is_breaking:
-            logger.info(f"⚡ Post #{post_id} is BREAKING NEWS — auto-publishing!")
-        else:
-            logger.info(f"🤖 Post #{post_id} auto-approved (AUTO_PUBLISH mode)")
+    # Step 4: Breaking news → auto-publish without moderation; regular → auto-approve for queue
+    if is_breaking:
+        logger.info(f"⚡ Post #{post_id} is BREAKING NEWS — auto-publishing!")
         updated_post = await _db.get_post(post_id)
         await _db.update_post_status(post_id, "approved")
         success = await _publish_post(updated_post)
-        if success and is_breaking:
-            # Notify admins about breaking news only
+        if success:
             for admin_id in _config.admin_ids:
                 try:
                     await _bot.send_message(
@@ -1347,84 +1093,60 @@ async def process_new_post(post_id: int):
                     )
                 except Exception:
                     pass
-    else:
-        # Regular post — send for moderation
-        for admin_id in _config.admin_ids:
-            try:
-                updated_post = await _db.get_post(post_id)
-                await _send_review_post(admin_id, updated_post)
-            except Exception as e:
-                logger.error(f"Failed to send review to admin {admin_id}: {e}")
+        return  # Breaking news processing complete, skip regular queue flow
 
-        logger.info(f"Post #{post_id} sent for review to {len(_config.admin_ids)} admin(s)")
+    # Regular post — auto-approve and add to publish queue
+    logger.info(f"Post #{post_id} auto-approved — will be published on next interval")
+    await _db.update_post_status(post_id, "approved")
 
+    # Notify admins (optional, informational only — no action needed)
+    approved_count = await _db.get_approved_posts()
+    for admin_id in _config.admin_ids:
+        try:
+            await _bot.send_message(
+                admin_id,
+                f"✅ Пост #{post_id} добавлен в очередь публикации.\n"
+                f"📋 В очереди: {len(approved_count)} постов\n"
+                f"⏰ Следующий выход — через ~{_config.publish_interval // 60} мин",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
 
 
 # ── Auto-Publish Scheduler ───────────────────────────────────────────────
 
-# ── /test_content command ────────────────────────────────────────────────
-
-@router.message(Command("test_content"))
-async def cmd_test_content(message: Message):
-    """Admin command: /test_content <rubric> — test a content rubric."""
-    if not is_admin(message.from_user.id):
-        return
-
-    if not _content_scheduler:
-        await message.reply("❌ Планировщик контента не инициализирован")
-        return
-
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        rubrics = [
-            "weather", "holiday", "history_fact", "five_facts",
-            "recipe", "lifehack", "place", "evening_fun", "daily_digest"
-        ]
-        await message.reply(
-            "📝 <b>Тест рубрик</b>\n\n"
-            "Использование: /test_content <рубрика>\n\n"
-            "Доступные рубрики:\n" +
-            "\n".join(f"• <code>{r}</code>" for r in rubrics),
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    rubric = args[1].strip().lower()
-    await message.reply(f"⏳ Генерация: {rubric}...")
-
-    try:
-        success = await _content_scheduler.force_publish(rubric)
-        if success:
-            await message.reply(f"✅ Рубрика '{rubric}' опубликована!")
-        else:
-            await message.reply(f"❌ Не удалось сгенерировать '{rubric}'")
-    except Exception as e:
-        await message.reply(f"❌ Ошибка: {e}")
-
 async def auto_publish_loop():
-    """Background task: publish ONE approved post per interval for even distribution."""
-    # Load saved settings from DB on startup
-    try:
-        await _config.reload_from_db(_db)
-        logger.info(f"Loaded settings from DB: publish_interval={_config.publish_interval}s")
-    except Exception as e:
-        logger.warning(f"Could not load settings from DB: {e}")
-
+    """Background task: auto-publish ONE approved post per interval.
+    
+    Publishes only one post at a time to avoid flooding the channel.
+    Interval is set by PUBLISH_INTERVAL env var (default 7200 = 2 hours).
+    """
     while True:
         try:
             interval = _config.publish_interval if _config else 7200
             await asyncio.sleep(interval)
 
-            # Publish ONE post (oldest approved)
-            post = await _db.get_oldest_approved_post()
-            if not post:
+            approved = await _db.get_approved_posts()
+            if not approved:
                 continue
 
+            # Publish only ONE post per interval
+            post = approved[0]
             success = await _publish_post(post)
+
             if success:
-                logger.info(
-                    f"📢 Scheduled publish: post #{post['id']} from @{post['source_channel']}"
-                )
+                logger.info(f"Auto-publisher: published post #{post['id']} ({len(approved)-1} remaining in queue)")
+                for admin_id in _config.admin_ids:
+                    try:
+                        remaining = len(approved) - 1
+                        await _bot.send_message(
+                            admin_id,
+                            f"📢 Авто-публикация: опубликован пост #{post['id']}.\n"
+                            f"📋 В очереди осталось: {remaining}",
+                        )
+                    except Exception:
+                        pass
 
         except asyncio.CancelledError:
             break
@@ -1435,14 +1157,15 @@ async def auto_publish_loop():
 
 # ── Bot Initialization ──────────────────────────────────────────────────
 
-def create_bot(config: Config, db: Database, rewriter: AIRewriter, media_proc: MediaProcessor) -> tuple:
+def create_bot(config: Config, db: Database, rewriter: AIRewriter, media_proc: MediaProcessor, vk_pub: Optional[VKPublisher] = None) -> tuple:
     """Create and configure the bot. Returns (bot, dispatcher)."""
-    global _config, _db, _rewriter, _media_processor, _bot
+    global _config, _db, _rewriter, _media_processor, _vk_publisher, _bot
 
     _config = config
     _db = db
     _rewriter = rewriter
     _media_processor = media_proc
+    _vk_publisher = vk_pub
 
     bot = Bot(token=config.bot_token)
     _bot = bot

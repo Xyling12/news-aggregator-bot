@@ -1,9 +1,16 @@
 """
 Media Processor — handles watermark detection, media downloading, and stock photo search.
+
+Stock photo priority:
+  1. Pixabay (primary) — free API, Russian language support, accessible from Russia.
+     Register at https://pixabay.com/api/docs/ to get a free API key.
+  2. Unsplash (fallback) — used only if Pixabay returns no results or is not configured.
 """
 
+import asyncio
 import logging
 import os
+import re
 from typing import Optional, List, Tuple
 
 import aiohttp
@@ -15,9 +22,14 @@ logger = logging.getLogger(__name__)
 class MediaProcessor:
     """Processes media files: watermark detection and stock photo search."""
 
-    def __init__(self, unsplash_key: str = "", pexels_key: str = "", media_dir: str = "media"):
+    def __init__(
+        self,
+        unsplash_key: str = "",
+        pixabay_key: str = "",
+        media_dir: str = "media",
+    ):
         self.unsplash_key = unsplash_key
-        self.pexels_key = pexels_key
+        self.pixabay_key = pixabay_key
         self.media_dir = media_dir
         os.makedirs(media_dir, exist_ok=True)
 
@@ -83,85 +95,169 @@ class MediaProcessor:
             return False, 0.0
 
     async def search_stock_photo(self, keywords: List[str], count: int = 3) -> List[dict]:
-        """
-        Search for stock photos. Tries Pexels first (supports Russian), then Unsplash.
-        
+        """Search for stock photos. Tries Wikimedia Commons first (no key, accessible from Russia),
+        falls back to Unsplash if Wikimedia returns nothing.
+
         Returns:
-            List of dicts with 'url', 'thumb_url', 'description', 'author'
+            List of dicts with 'url', 'thumb_url', 'description', 'author', 'source'
         """
-        # Try Pexels first (better Russian support)
-        if self.pexels_key:
-            results = await self._search_pexels(keywords, count)
-            if results:
-                return results
-
-        # Fallback to Unsplash
-        if self.unsplash_key:
+        results = await self._search_wikimedia(keywords, count)
+        if not results:
             results = await self._search_unsplash(keywords, count)
-            if results:
-                return results
+        return results
 
-        logger.warning("No stock photo API keys configured")
-        return []
+    async def _search_wikimedia(self, keywords: List[str], count: int) -> List[dict]:
+        """Search Wikimedia Commons for photos.
 
-    async def _search_pexels(self, keywords: List[str], count: int = 3) -> List[dict]:
-        """Search Pexels API (supports Russian queries)."""
-        query = " ".join(keywords[:3])
+        Uses the public MediaWiki API — no key required, works from Russia.
+        Two-step process:
+          1. Full-text search in file namespace (NS=6)
+          2. Resolve image URL + thumbnail for each result
+        """
+        query = " ".join(keywords[:4])
         results = []
 
+        COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+
         try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://api.pexels.com/v1/search"
-                params = {
-                    "query": query,
-                    "per_page": count,
-                    "orientation": "landscape",
-                    "locale": "ru-RU",
-                }
-                headers = {
-                    "Authorization": self.pexels_key,
-                }
+            async with aiohttp.ClientSession(
+                headers={"User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"}
+            ) as session:
+                # ── Step 1: search for file titles ─────────────────────────
 
-                async with session.get(url, params=params, headers=headers,
-                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
+                # Try Russian query first, fall back to English keywords if empty
+                async def _search_titles(q: str) -> List[str]:
+                    params = {
+                        "action": "query",
+                        "list": "search",
+                        "srsearch": q,
+                        "srnamespace": "6",        # NS 6 = File:
+                        "srlimit": str(count * 3), # fetch extra — many will be SVG/audio
+                        "srwhat": "text",
+                        "format": "json",
+                    }
+                    async with session.get(
+                        COMMONS_API, params=params,
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        if resp.status != 200:
+                            return []
                         data = await resp.json()
-                        for photo in data.get("photos", []):
-                            results.append({
-                                "url": photo["src"]["large2x"],
-                                "thumb_url": photo["src"]["medium"],
-                                "description": photo.get("alt", ""),
-                                "author": photo.get("photographer", "Pexels"),
-                            })
-                        logger.info(f"Pexels: found {len(results)} photos for '{query}'")
-                    else:
-                        error = await resp.text()
-                        logger.error(f"Pexels API returned {resp.status}: {error}")
+                        return [
+                            item["title"]
+                            for item in data.get("query", {}).get("search", [])
+                        ]
 
+                titles = await _search_titles(query)
+                if not titles:
+                    # Fallback: use first keyword in English if all were Cyrillic
+                    en_kw = [k for k in keywords if k.isascii()][:2]
+                    if en_kw:
+                        titles = await _search_titles(" ".join(en_kw))
+
+                if not titles:
+                    logger.info(f"Wikimedia: no results for '{query}'")
+                    return []
+
+                # ── Step 2: resolve image URLs in one batch request ─────────
+
+                # MediaWiki accepts up to 50 titles per request
+                batch = "|".join(titles[: min(count * 3, 15)])
+                img_params = {
+                    "action": "query",
+                    "titles": batch,
+                    "prop": "imageinfo",
+                    "iiprop": "url|mime|extmetadata",
+                    "iiurlwidth": "1200",   # request a 1200px-wide scaled version
+                    "format": "json",
+                }
+                async with session.get(
+                    COMMONS_API, params=img_params,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.error(f"Wikimedia imageinfo {resp.status}")
+                        return []
+                    data = await resp.json()
+
+                pages = data.get("query", {}).get("pages", {}).values()
+                for page in pages:
+                    if len(results) >= count:
+                        break
+                    infos = page.get("imageinfo", [])
+                    if not infos:
+                        continue
+                    info = infos[0]
+
+                    # Skip non-photo types
+                    mime = info.get("mime", "")
+                    if not mime.startswith("image/"):
+                        continue
+                    if mime in ("image/svg+xml", "image/gif"):
+                        continue
+
+                    full_url = info.get("url", "")
+                    thumb_url = info.get("thumburl", full_url)
+                    if not full_url:
+                        continue
+
+                    # Extract author and description from extmetadata
+                    meta = info.get("extmetadata", {})
+                    author = (
+                        meta.get("Artist", {}).get("value", "")
+                        or meta.get("Credit", {}).get("value", "Wikimedia Commons")
+                    )
+                    # Strip HTML tags from author string
+                    author = re.sub(r"<[^>]+>", "", author).strip() or "Wikimedia Commons"
+
+                    description = (
+                        meta.get("ImageDescription", {}).get("value", "")
+                        or page.get("title", "").replace("File:", "")
+                    )
+                    description = re.sub(r"<[^>]+>", "", description).strip()[:120]
+
+                    results.append({
+                        "url": full_url,
+                        "thumb_url": thumb_url,
+                        "description": description,
+                        "author": author,
+                        "source": "wikimedia",
+                    })
+
+                logger.info(f"Wikimedia: found {len(results)} photos for '{query}'")
+
+        except asyncio.TimeoutError:
+            logger.error("Wikimedia Commons API timeout (>15s)")
+        except aiohttp.ClientError as e:
+            logger.error(f"Wikimedia network error: {type(e).__name__}: {e}")
         except Exception as e:
-            logger.error(f"Pexels search failed: {e}")
+            logger.error(f"Wikimedia search failed: {type(e).__name__}: {e}")
 
         return results
 
-    async def _search_unsplash(self, keywords: List[str], count: int = 3) -> List[dict]:
-        """Search Unsplash API (English keywords recommended)."""
+    async def _search_unsplash(self, keywords: List[str], count: int) -> List[dict]:
+        """Search Unsplash as a fallback. Requires UNSPLASH_ACCESS_KEY."""
+        if not self.unsplash_key:
+            return []
+
         query = " ".join(keywords[:3])
         results = []
 
         try:
             async with aiohttp.ClientSession() as session:
-                url = "https://api.unsplash.com/search/photos"
                 params = {
                     "query": query,
                     "per_page": count,
                     "orientation": "landscape",
                 }
-                headers = {
-                    "Authorization": f"Client-ID {self.unsplash_key}",
-                }
+                headers = {"Authorization": f"Client-ID {self.unsplash_key}"}
 
-                async with session.get(url, params=params, headers=headers,
-                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(
+                    "https://api.unsplash.com/search/photos",
+                    params=params,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for photo in data.get("results", []):
@@ -170,14 +266,21 @@ class MediaProcessor:
                                 "thumb_url": photo["urls"]["thumb"],
                                 "description": photo.get("description", ""),
                                 "author": photo["user"]["name"],
+                                "source": "unsplash",
                             })
-                        logger.info(f"Unsplash: found {len(results)} photos for '{query}'")
+                        logger.info(
+                            f"Unsplash: found {len(results)} photos for '{query}'"
+                        )
                     else:
                         error = await resp.text()
-                        logger.error(f"Unsplash API returned {resp.status}: {error}")
+                        logger.error(f"Unsplash API {resp.status}: {error[:200]}")
 
+        except asyncio.TimeoutError:
+            logger.error("Unsplash API timeout (>15s)")
+        except aiohttp.ClientError as e:
+            logger.error(f"Unsplash network error: {type(e).__name__}: {e}")
         except Exception as e:
-            logger.error(f"Unsplash search failed: {e}")
+            logger.error(f"Unsplash search failed: {type(e).__name__}: {e}")
 
         return results
 

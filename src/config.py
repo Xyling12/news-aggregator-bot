@@ -34,8 +34,9 @@ class Config:
     # Source channels to monitor
     source_channels: List[str] = field(default_factory=list)
 
-    # Optional: Unsplash API
-    unsplash_access_key: str = ""
+    # Optional: Stock photo APIs
+    pixabay_api_key: str = ""       # Primary (Russian language support)
+    unsplash_access_key: str = ""   # Fallback
 
     # Optional: YandexGPT API
     yandex_api_key: str = ""
@@ -116,6 +117,7 @@ class Config:
             admin_ids=admin_ids,
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             source_channels=source_channels,
+            pixabay_api_key=os.getenv("PIXABAY_API_KEY", ""),
             unsplash_access_key=os.getenv("UNSPLASH_ACCESS_KEY", ""),
             yandex_api_key=os.getenv("YANDEX_API_KEY", ""),
             yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
