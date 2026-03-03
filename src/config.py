@@ -62,7 +62,7 @@ class Config:
     min_text_length: int = 100
     check_interval: int = 60
     language: str = "ru"
-    publish_interval: int = 7200  # Auto-publish interval in seconds (default 2h)
+    publish_interval: int = 900  # Auto-publish interval in seconds (default 15min)
 
     # Ad filter stop-words
     ad_stop_words: List[str] = field(default_factory=lambda: [

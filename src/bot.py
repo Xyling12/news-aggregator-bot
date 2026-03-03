@@ -154,6 +154,26 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Отменено.")
 
+@router.message(Command("clear_queue"))
+async def cmd_clear_queue(message: Message):
+    """Reject all pending/review posts to start fresh with current news."""
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🗑 Очищаю очередь...")
+    count = 0
+    for status in ("pending", "review", "rewriting"):
+        posts = await _db.get_posts_by_status(status, limit=200)
+        for post in posts:
+            await _db.update_post_status(post["id"], "rejected")
+            count += 1
+
+    await message.answer(
+        f"✅ Очередь очищена! Отклонено постов: {count}\n\n"
+        f"Бот начнёт собирать актуальные новости с нуля."
+    )
+
+
 
 @router.message(SendNewsStates.waiting_for_news)
 async def process_user_news(message: Message, state: FSMContext):
@@ -1229,11 +1249,24 @@ async def process_new_post(post_id: int):
         except Exception as e2:
             logger.warning(f"Post #{post_id}: fallback keyword extraction failed: {e2}")
 
-    # Method 3: Generic topic photo (last resort)
+    # Method 3: Generic topic photo (last resort) — randomized pool to avoid repetition
     if not stock_url:
         try:
-            generic_queries = ["city news", "Izhevsk Russia", "urban life", "newspaper"]
-            for query in generic_queries:
+            import random
+            generic_pool = [
+                "breaking news", "journalism", "press conference",
+                "city hall", "government building", "urban street",
+                "town square", "local event", "community meeting",
+                "russia cityscape", "russia city", "russian architecture",
+                "office workers", "business meeting", "handshake deal",
+                "construction site", "road repair", "new building",
+                "police car", "ambulance street", "fire department",
+                "classroom school", "hospital corridor", "shopping mall interior",
+                "park people walking", "market place", "sports stadium",
+                "traffic cars", "bus stop", "railway station",
+            ]
+            random.shuffle(generic_pool)
+            for query in generic_pool[:4]:
                 stock_photos = await _media_processor.search_stock_photo([query])
                 if stock_photos:
                     stock_url = stock_photos[0]["url"]
