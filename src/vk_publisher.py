@@ -53,10 +53,12 @@ class VKPublisher:
         text = text.replace('&gt;', '>')
         text = text.replace('&quot;', '"')
 
-        # Remove Telegram-specific footer and replace with VK footer
-        text = re.sub(r'\n*📲\s*@\w+\s*\|\s*📩\s*@\w+\s*$', '', text.strip())
+        # Remove Telegram-specific footer lines (various formats)
+        text = re.sub(r'\n*📲\s*@\w.*$', '', text.strip(), flags=re.MULTILINE)
+        text = re.sub(r'\n*📩\s*@\w.*$', '', text.strip(), flags=re.MULTILINE)
+        text = re.sub(r'\n*\S*t\.me/\S+.*$', '', text.strip(), flags=re.MULTILINE)
         text = text.strip()
-        text += f"\n\n📲 Подписывайтесь: vk.com/club{self.group_id}"
+        text += "\n\n✉️ Ижевск Сегодня — подписывайтесь на наш канал ВКонтакте!"
 
         return text
 
