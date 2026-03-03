@@ -40,7 +40,7 @@ class VKPublisher:
         return self._enabled
 
     def _clean_html_for_vk(self, text: str) -> str:
-        """Convert HTML formatting to VK-compatible plain text."""
+        """Convert HTML formatting to VK-compatible plain text and swap footer."""
         # Replace <b>text</b> with text in caps or just text
         text = re.sub(r'<b>(.*?)</b>', r'\1', text)
         text = re.sub(r'<i>(.*?)</i>', r'\1', text)
@@ -52,7 +52,13 @@ class VKPublisher:
         text = text.replace('&lt;', '<')
         text = text.replace('&gt;', '>')
         text = text.replace('&quot;', '"')
-        return text.strip()
+
+        # Remove Telegram-specific footer and replace with VK footer
+        text = re.sub(r'\n*📲\s*@\w+\s*\|\s*📩\s*@\w+\s*$', '', text.strip())
+        text = text.strip()
+        text += f"\n\n📲 Подписывайтесь: vk.com/club{self.group_id}"
+
+        return text
 
     async def _upload_photo_from_url(self, photo_url: str) -> Optional[str]:
         """Download photo from URL and upload to VK. Returns VK attachment string."""
