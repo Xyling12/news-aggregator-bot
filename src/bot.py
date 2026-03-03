@@ -1131,13 +1131,27 @@ async def process_new_post(post_id: int):
 async def auto_publish_loop():
     """Background task: auto-publish ONE approved post per interval.
     
-    Publishes only one post at a time to avoid flooding the channel.
-    Interval is set by PUBLISH_INTERVAL env var (default 7200 = 2 hours).
+    Checks the queue every 60 seconds. Publishes a post only if enough time
+    has passed since the last publication (governed by PUBLISH_INTERVAL).
+    This way posts don't sit waiting for up to PUBLISH_INTERVAL seconds.
     """
+    last_published_at: float = 0.0
+    CHECK_EVERY = 60  # Check queue every 60 seconds
+
     while True:
         try:
-            interval = _config.publish_interval if _config else 7200
-            await asyncio.sleep(interval)
+            await asyncio.sleep(CHECK_EVERY)
+
+            if not _config or not _db:
+                continue
+
+            interval = _config.publish_interval
+            import time
+            now = time.monotonic()
+
+            # Not enough time since last publish
+            if now - last_published_at < interval:
+                continue
 
             approved = await _db.get_approved_posts()
             if not approved:
@@ -1148,6 +1162,7 @@ async def auto_publish_loop():
             success = await _publish_post(post)
 
             if success:
+                last_published_at = time.monotonic()
                 logger.info(f"Auto-publisher: published post #{post['id']} ({len(approved)-1} remaining in queue)")
                 for admin_id in _config.admin_ids:
                     try:
