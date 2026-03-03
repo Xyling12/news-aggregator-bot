@@ -1286,14 +1286,17 @@ async def process_new_post(post_id: int):
             await _db.update_post_media(post_id, has_watermark=True)
             logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
 
-    # Step 4: Breaking news → auto-publish, regular → send for review
-    if is_breaking:
-        logger.info(f"⚡ Post #{post_id} is BREAKING NEWS — auto-publishing!")
+    # Step 4: Breaking news or AUTO_PUBLISH → auto-publish, regular → send for review
+    if is_breaking or _config.auto_publish:
+        if is_breaking:
+            logger.info(f"⚡ Post #{post_id} is BREAKING NEWS — auto-publishing!")
+        else:
+            logger.info(f"🤖 Post #{post_id} auto-approved (AUTO_PUBLISH mode)")
         updated_post = await _db.get_post(post_id)
         await _db.update_post_status(post_id, "approved")
         success = await _publish_post(updated_post)
-        if success:
-            # Notify admins about auto-published breaking news
+        if success and is_breaking:
+            # Notify admins about breaking news only
             for admin_id in _config.admin_ids:
                 try:
                     await _bot.send_message(
@@ -1314,6 +1317,7 @@ async def process_new_post(post_id: int):
                 logger.error(f"Failed to send review to admin {admin_id}: {e}")
 
         logger.info(f"Post #{post_id} sent for review to {len(_config.admin_ids)} admin(s)")
+
 
 
 # ── Auto-Publish Scheduler ───────────────────────────────────────────────

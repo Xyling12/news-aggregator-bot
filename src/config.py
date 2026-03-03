@@ -63,6 +63,7 @@ class Config:
     check_interval: int = 60
     language: str = "ru"
     publish_interval: int = 900  # Auto-publish interval in seconds (default 15min)
+    auto_publish: bool = False   # Skip moderation and auto-approve all posts
 
     # Ad filter stop-words
     ad_stop_words: List[str] = field(default_factory=lambda: [
@@ -128,7 +129,8 @@ class Config:
             min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "100")),
             check_interval=int(os.getenv("CHECK_INTERVAL", "60")),
             language=os.getenv("LANGUAGE", "ru"),
-            publish_interval=int(os.getenv("PUBLISH_INTERVAL", "7200")),
+            publish_interval=int(os.getenv("PUBLISH_INTERVAL", "900")),
+            auto_publish=os.getenv("AUTO_PUBLISH", "false").lower() == "true",
         )
 
     def validate(self) -> List[str]:
