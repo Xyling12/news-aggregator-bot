@@ -580,7 +580,6 @@ async def cb_settings(callback: CallbackQuery):
         f"🗣 Язык: <b>{_config.language}</b>\n\n"
         f"🚫 Фильтры:\n"
         f"  • Реклама: <b>{len(_config.ad_stop_words)} слов</b>\n"
-        f"  • Политика: <b>{len(_config.politics_stop_words)} слов</b>\n"
         f"  • Срочные новости: <b>{len(_config.breaking_keywords)} слов</b>\n\n"
         f"📢 Канал: <b>@{_config.target_channel}</b>"
     )
@@ -1000,12 +999,7 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: ad/spam (matched: {', '.join(ad_matches[:3])})")
         return
 
-    # Step 0a2: Politics filter — skip political posts
-    politics_matches = [w for w in _config.politics_stop_words if w in text_lower]
-    if len(politics_matches) >= 2:  # 2+ political keywords = politics
-        await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: politics (matched: {', '.join(politics_matches[:3])})")
-        return
+
 
     # Step 0b: Relevance filter for federal channels
     source = post["source_channel"].lower()
