@@ -195,6 +195,16 @@ class ContentScheduler:
                 )
                 logger.info(f"✅ Published {label} (no photo) to {target}")
 
+            # VK crosspost
+            try:
+                import src.bot as bot_module
+                vk = getattr(bot_module, '_vk_publisher', None)
+                if vk and vk.enabled:
+                    await vk.publish(text, photo_url=photo_url)
+                    logger.info(f"✅ VK crosspost: {label}")
+            except Exception as vk_err:
+                logger.warning(f"VK crosspost failed for {label}: {vk_err}")
+
             # Notify admins
             for admin_id in self.config.admin_ids:
                 try:

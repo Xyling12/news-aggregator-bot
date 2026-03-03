@@ -50,6 +50,7 @@ _rewriter: Optional[AIRewriter] = None
 _media_processor: Optional[MediaProcessor] = None
 _bot: Optional[Bot] = None
 _content_scheduler = None  # Set by main.py after init
+_vk_publisher = None  # Set by main.py after init
 
 
 def is_admin(user_id: int) -> bool:
@@ -1044,6 +1045,15 @@ async def _publish_post(post: dict) -> bool:
         await _db.add_published(post["id"], msg.message_id)
 
         logger.info(f"Published post #{post['id']} to {target}")
+
+        # VK crosspost
+        if _vk_publisher and _vk_publisher.enabled:
+            try:
+                vk_photo = replacement_url or media_url or None
+                await _vk_publisher.publish(text, photo_url=vk_photo)
+            except Exception as vk_err:
+                logger.warning(f"VK crosspost failed for post #{post['id']}: {vk_err}")
+
         return True
 
     except Exception as e:

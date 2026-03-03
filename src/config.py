@@ -47,6 +47,10 @@ class Config:
     # Optional: OpenWeatherMap API
     openweather_api_key: str = ""
 
+    # Optional: VK crossposting
+    vk_access_token: str = ""
+    vk_group_id: str = ""
+
     # Settings
     min_text_length: int = 100
     check_interval: int = 60
@@ -116,6 +120,8 @@ class Config:
             yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
             retext_api_key=os.getenv("RETEXT_API_KEY", ""),
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
+            vk_access_token=os.getenv("VK_ACCESS_TOKEN", ""),
+            vk_group_id=os.getenv("VK_GROUP_ID", ""),
             min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "100")),
             check_interval=int(os.getenv("CHECK_INTERVAL", "60")),
             language=os.getenv("LANGUAGE", "ru"),

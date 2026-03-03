@@ -18,6 +18,7 @@ from src.media_processor import MediaProcessor
 from src.bot import create_bot, process_new_post, auto_publish_loop
 from src.content_generator import ContentGenerator
 from src.content_scheduler import ContentScheduler
+from src.vk_publisher import VKPublisher
 
 # Logging setup
 logging.basicConfig(
@@ -85,6 +86,15 @@ async def main():
     # Store scheduler in bot module for /test_content command
     import src.bot as bot_module
     bot_module._content_scheduler = content_scheduler
+
+    # Create VK publisher
+    vk_pub = VKPublisher(
+        access_token=config.vk_access_token,
+        group_id=config.vk_group_id,
+    )
+    bot_module._vk_publisher = vk_pub
+    if vk_pub.enabled:
+        logger.info(f"VK crossposting enabled for group {config.vk_group_id}")
 
     # Create channel monitor
     monitor = ChannelMonitor(config, db)
