@@ -44,6 +44,9 @@ class Config:
     # Optional: ReText.AI API
     retext_api_key: str = ""
 
+    # Optional: OpenWeatherMap API
+    openweather_api_key: str = ""
+
     # Settings
     min_text_length: int = 100
     check_interval: int = 60
@@ -112,6 +115,7 @@ class Config:
             yandex_api_key=os.getenv("YANDEX_API_KEY", ""),
             yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
             retext_api_key=os.getenv("RETEXT_API_KEY", ""),
+            openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
             min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "100")),
             check_interval=int(os.getenv("CHECK_INTERVAL", "60")),
             language=os.getenv("LANGUAGE", "ru"),

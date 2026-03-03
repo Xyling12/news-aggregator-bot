@@ -49,6 +49,7 @@ _db: Optional[Database] = None
 _rewriter: Optional[AIRewriter] = None
 _media_processor: Optional[MediaProcessor] = None
 _bot: Optional[Bot] = None
+_content_scheduler = None  # Set by main.py after init
 
 
 def is_admin(user_id: int) -> bool:
@@ -1190,6 +1191,45 @@ async def process_new_post(post_id: int):
 
 
 # ── Auto-Publish Scheduler ───────────────────────────────────────────────
+
+# ── /test_content command ────────────────────────────────────────────────
+
+@router.message(Command("test_content"))
+async def cmd_test_content(message: Message):
+    """Admin command: /test_content <rubric> — test a content rubric."""
+    if not is_admin(message.from_user.id):
+        return
+
+    if not _content_scheduler:
+        await message.reply("❌ Планировщик контента не инициализирован")
+        return
+
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        rubrics = [
+            "weather", "holiday", "history_fact", "five_facts",
+            "recipe", "lifehack", "place", "evening_fun", "daily_digest"
+        ]
+        await message.reply(
+            "📝 <b>Тест рубрик</b>\n\n"
+            "Использование: /test_content <рубрика>\n\n"
+            "Доступные рубрики:\n" +
+            "\n".join(f"• <code>{r}</code>" for r in rubrics),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    rubric = args[1].strip().lower()
+    await message.reply(f"⏳ Генерация: {rubric}...")
+
+    try:
+        success = await _content_scheduler.force_publish(rubric)
+        if success:
+            await message.reply(f"✅ Рубрика '{rubric}' опубликована!")
+        else:
+            await message.reply(f"❌ Не удалось сгенерировать '{rubric}'")
+    except Exception as e:
+        await message.reply(f"❌ Ошибка: {e}")
 
 async def auto_publish_loop():
     """Background task: publish ONE approved post per interval for even distribution."""

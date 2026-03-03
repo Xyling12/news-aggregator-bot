@@ -255,6 +255,18 @@ class Database:
         )
         await self._db.commit()
 
+    async def get_today_published_texts(self) -> List[str]:
+        """Get rewritten texts of posts published today (for daily digest)."""
+        cursor = await self._db.execute(
+            """SELECT p.rewritten_text FROM posts p
+               JOIN published pub ON pub.post_id = p.id
+               WHERE pub.published_at > datetime('now', '-16 hours')
+               AND p.rewritten_text IS NOT NULL
+               ORDER BY pub.published_at DESC"""
+        )
+        rows = await cursor.fetchall()
+        return [row["rewritten_text"] for row in rows]
+
     # ── Settings ─────────────────────────────────────────────────────────
 
     async def get_setting(self, key: str, default: str = None) -> Optional[str]:

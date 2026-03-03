@@ -16,6 +16,8 @@ from src.channel_monitor import ChannelMonitor
 from src.ai_rewriter import AIRewriter
 from src.media_processor import MediaProcessor
 from src.bot import create_bot, process_new_post, auto_publish_loop
+from src.content_generator import ContentGenerator
+from src.content_scheduler import ContentScheduler
 
 # Logging setup
 logging.basicConfig(
@@ -66,6 +68,24 @@ async def main():
     bot, dp = create_bot(config, db, rewriter, media_proc)
     logger.info("Aiogram bot created")
 
+    # Create content generator & scheduler
+    content_gen = ContentGenerator(
+        config=config,
+        gemini_model=rewriter._gemini_model,
+        media_processor=media_proc,
+    )
+    content_scheduler = ContentScheduler(
+        config=config,
+        bot=bot,
+        generator=content_gen,
+        db=db,
+    )
+    logger.info("Content generator & scheduler created")
+
+    # Store scheduler in bot module for /test_content command
+    import src.bot as bot_module
+    bot_module._content_scheduler = content_scheduler
+
     # Create channel monitor
     monitor = ChannelMonitor(config, db)
 
@@ -85,9 +105,12 @@ async def main():
             logger.warning(f"⚠️ Channel monitor failed to start: {e}")
             logger.info("Bot will continue WITHOUT channel monitoring...")
 
-        # Start auto-publish scheduler
+        # Start auto-publish scheduler (from queue)
         publish_task = asyncio.create_task(auto_publish_loop())
         logger.info(f"Auto-publisher started (interval: {config.publish_interval}s)")
+
+        # Start content scheduler (generates unique content on fixed schedule)
+        await content_scheduler.start()
 
         # Run Aiogram bot (this is the main event loop)
         logger.info("Starting Aiogram polling...")
@@ -100,6 +123,7 @@ async def main():
     finally:
         if publish_task:
             publish_task.cancel()
+        await content_scheduler.stop()
         if monitor_started:
             await monitor.stop()
         await db.close()
