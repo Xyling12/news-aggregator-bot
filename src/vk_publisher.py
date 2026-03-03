@@ -84,16 +84,32 @@ class VKPublisher:
                         return None
                     upload_url = data["response"]["upload_url"]
 
-                # Step 2: Download the photo
-                async with session.get(photo_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                # Step 2: Download the photo (follow redirects, detect content type)
+                async with session.get(
+                    photo_url,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    allow_redirects=True,
+                ) as resp:
                     if resp.status != 200:
-                        logger.error(f"Failed to download photo: {resp.status}")
+                        logger.error(f"Failed to download photo: {resp.status} {photo_url[:80]}")
                         return None
                     photo_data = await resp.read()
+                    content_type = resp.content_type or "image/jpeg"
+                    # Determine file extension from content-type
+                    ext_map = {
+                        "image/jpeg": "jpg",
+                        "image/jpg": "jpg",
+                        "image/png": "png",
+                        "image/webp": "jpg",  # VK doesn't handle WebP well, rename to jpg
+                        "image/gif": "gif",
+                    }
+                    ext = ext_map.get(content_type.split(";")[0].strip(), "jpg")
+                    # Convert WebP data to just let VK handle it (most modern VK handles it fine)
+                    upload_content_type = "image/jpeg" if "webp" in content_type else content_type.split(";")[0].strip()
 
                 # Step 3: Upload to VK
                 form = aiohttp.FormData()
-                form.add_field("photo", photo_data, filename="photo.jpg", content_type="image/jpeg")
+                form.add_field("photo", photo_data, filename=f"photo.{ext}", content_type=upload_content_type)
                 async with session.post(upload_url, data=form, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     upload_result = await resp.json()
                     if not upload_result.get("photo") or upload_result["photo"] == "[]":
