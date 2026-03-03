@@ -512,7 +512,8 @@ async def _send_settings_menu(chat_id: int):
         f"📢 Канал: <b>@{_config.target_channel}</b>\n\n"
         f"📤 Интервал публикации: <b>{pub_min} мин</b>\n"
         f"⏱ Интервал проверки: <b>{_config.check_interval} сек</b>\n"
-        f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n\n"
+        f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n"
+        f"🤖 Автопубликация: <b>{'✅ ВКЛ' if _config.auto_publish else '⛔ ВЫКЛ'}</b>\n\n"
         f"🚫 Фильтры: реклама ({len(_config.ad_stop_words)}), "
         f"мусор ({len(_config.lowvalue_stop_words)}), "
         f"срочные ({len(_config.breaking_keywords)})\n\n"
@@ -556,6 +557,13 @@ async def _send_settings_menu(chat_id: int):
             InlineKeyboardButton(text=_len_label(100), callback_data="set_len:100"),
             InlineKeyboardButton(text=_len_label(200), callback_data="set_len:200"),
             InlineKeyboardButton(text=_len_label(300), callback_data="set_len:300"),
+        ],
+        # Auto-publish toggle
+        [
+            InlineKeyboardButton(
+                text=f"🤖 Автопубликация: {'✅ ВКЛ' if _config.auto_publish else '⛔ ВЫКЛ'} — нажми чтобы переключить",
+                callback_data="toggle_autopub",
+            )
         ],
     ])
     await _bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -868,6 +876,23 @@ async def cb_set_min_length(callback: CallbackQuery):
     _config.min_text_length = chars
     await _db.set_setting("min_text_length", str(chars))
     await callback.answer(f"✅ Мин. длина: {chars} символов")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _send_settings_menu(callback.message.chat.id)
+
+
+@router.callback_query(F.data == "toggle_autopub")
+async def cb_toggle_autopub(callback: CallbackQuery):
+    """Toggle auto-publish mode on/off."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    _config.auto_publish = not _config.auto_publish
+    await _db.set_setting("auto_publish", "true" if _config.auto_publish else "false")
+    status = "✅ ВКЛ — посты публикуются автоматически" if _config.auto_publish else "⛔ ВЫКЛ — посты идут на модерацию"
+    await callback.answer(f"🤖 Автопубликация: {status}", show_alert=True)
     try:
         await callback.message.delete()
     except Exception:

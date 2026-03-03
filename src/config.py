@@ -159,3 +159,7 @@ class Config:
         val = await db.get_setting("min_text_length")
         if val:
             self.min_text_length = int(val)
+        val = await db.get_setting("auto_publish")
+        if val is not None:
+            self.auto_publish = val.lower() == "true"
+
