@@ -1220,13 +1220,15 @@ async def process_new_post(post_id: int):
     await _db.update_post_status(post_id, "rewriting")
     rewritten, engine = await _rewriter.rewrite(original_text)
 
-    if rewritten:
-        rewritten = _clean_text(rewritten)  # Clean AI output too
-        uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
-        logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
-    else:
-        rewritten = original_text
-        logger.warning(f"Post #{post_id}: AI rewrite failed, using original text")
+    if not rewritten:
+        # All AI engines failed or returned a refusal — silently reject the post
+        await _db.update_post_status(post_id, "rejected")
+        logger.warning(f"Post #{post_id}: all AI engines failed or refused — post silently rejected")
+        return
+
+    rewritten = _clean_text(rewritten)  # Clean AI output too
+    uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
+    logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
 
     # Step 2: Generate hashtags
     hashtags = await _rewriter.generate_hashtags(rewritten)
