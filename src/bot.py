@@ -68,6 +68,9 @@ _media_processor: Optional[MediaProcessor] = None
 _vk_publisher: Optional[VKPublisher] = None
 _bot: Optional[Bot] = None
 
+# Rate limiting: max 3 concurrent AI calls to avoid Gemini 429 errors
+_ai_semaphore = asyncio.Semaphore(3)
+
 
 def is_admin(user_id: int) -> bool:
     """Check if user is admin."""
@@ -1031,9 +1034,10 @@ async def process_new_post(post_id: int):
     # Step 0d: Breaking news detection — auto-publish without moderation
     is_breaking = any(kw in text_lower for kw in _config.breaking_keywords)
 
-    # Step 1: AI Rewrite
+    # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
     await _db.update_post_status(post_id, "rewriting")
-    rewritten, engine = await _rewriter.rewrite(original_text)
+    async with _ai_semaphore:
+        rewritten, engine = await _rewriter.rewrite(original_text)
 
     if rewritten:
         rewritten = _clean_text(rewritten)  # Clean AI output too

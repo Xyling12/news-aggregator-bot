@@ -26,10 +26,12 @@ class MediaProcessor:
         self,
         unsplash_key: str = "",
         pixabay_key: str = "",
+        pexels_key: str = "",
         media_dir: str = "media",
     ):
         self.unsplash_key = unsplash_key
         self.pixabay_key = pixabay_key
+        self.pexels_key = pexels_key  # Reserved for future Pexels API integration
         self.media_dir = media_dir
         os.makedirs(media_dir, exist_ok=True)
 
@@ -148,12 +150,13 @@ class MediaProcessor:
                             for item in data.get("query", {}).get("search", [])
                         ]
 
+                query = " ".join(["Izhevsk"] + keywords[:3])  # Always anchor to Izhevsk
                 titles = await _search_titles(query)
                 if not titles:
-                    # Fallback: use first keyword in English if all were Cyrillic
+                    # Fallback: English keywords + Izhevsk
                     en_kw = [k for k in keywords if k.isascii()][:2]
                     if en_kw:
-                        titles = await _search_titles(" ".join(en_kw))
+                        titles = await _search_titles("Izhevsk " + " ".join(en_kw))
 
                 if not titles:
                     logger.info(f"Wikimedia: no results for '{query}'")

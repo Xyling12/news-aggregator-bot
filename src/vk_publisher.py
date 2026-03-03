@@ -26,6 +26,11 @@ class VKPublisher:
         self.group_id = group_id.replace("club", "")  # Strip "club" prefix if present
         self._session: Optional[aiohttp.ClientSession] = None
 
+    @property
+    def enabled(self) -> bool:
+        """True if VK crossposting is configured."""
+        return bool(self.access_token and self.group_id)
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if not self._session or self._session.closed:
             self._session = aiohttp.ClientSession()

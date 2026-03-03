@@ -4,6 +4,7 @@ Main entry point — starts both the Telethon channel monitor and the Aiogram bo
 
 import asyncio
 import logging
+import logging.handlers
 import sys
 import os
 
@@ -28,7 +29,12 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("data/bot.log", encoding="utf-8"),
+        logging.handlers.RotatingFileHandler(
+            "data/bot.log",
+            maxBytes=10 * 1024 * 1024,  # 10 MB per file
+            backupCount=3,
+            encoding="utf-8",
+        ),
     ],
 )
 logger = logging.getLogger("main")
