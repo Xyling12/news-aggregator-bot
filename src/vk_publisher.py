@@ -58,7 +58,7 @@ class VKPublisher:
         text = re.sub(r'\n*📩\s*@\w.*$', '', text.strip(), flags=re.MULTILINE)
         text = re.sub(r'\n*\S*t\.me/\S+.*$', '', text.strip(), flags=re.MULTILINE)
         text = text.strip()
-        text += f"\n\n✉️ Ижевск Сегодня — vk.com/club{self.group_id}"
+        text += f"\n\n📲 vk.com/club{self.group_id} | 📩 @IzhevskTodayBot"
 
         return text
 
