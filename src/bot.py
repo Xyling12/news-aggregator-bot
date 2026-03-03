@@ -1221,12 +1221,22 @@ async def process_new_post(post_id: int):
     rewritten, engine = await _rewriter.rewrite(original_text)
 
     if not rewritten:
-        # All AI engines failed or returned a refusal — silently reject the post
+        # All AI engines failed — silently reject the post
         await _db.update_post_status(post_id, "rejected")
-        logger.warning(f"Post #{post_id}: all AI engines failed or refused — post silently rejected")
+        logger.warning(f"Post #{post_id}: all AI engines failed — post silently rejected")
         return
 
     rewritten = _clean_text(rewritten)  # Clean AI output too
+
+    # 🛡️ Double safety: catch ANY refusal text that slipped through engine filters
+    from src.ai_rewriter import REFUSAL_PHRASES
+    rewritten_lower = rewritten.lower()
+    for phrase in REFUSAL_PHRASES:
+        if phrase in rewritten_lower:
+            await _db.update_post_status(post_id, "rejected")
+            logger.warning(f"Post #{post_id}: refusal text detected after rewrite — silently rejected. Phrase: '{phrase}'")
+            return
+
     uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
     logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
 
