@@ -124,3 +124,15 @@ class Config:
         if not self.source_channels:
             errors.append("SOURCE_CHANNELS is required (at least one channel)")
         return errors
+
+    async def reload_from_db(self, db) -> None:
+        """Reload editable settings from the database (applied without restart)."""
+        val = await db.get_setting("publish_interval")
+        if val:
+            self.publish_interval = int(val)
+        val = await db.get_setting("check_interval")
+        if val:
+            self.check_interval = int(val)
+        val = await db.get_setting("min_text_length")
+        if val:
+            self.min_text_length = int(val)

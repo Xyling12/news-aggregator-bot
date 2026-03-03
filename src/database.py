@@ -215,6 +215,14 @@ class Database:
         """Get approved posts ready for publishing."""
         return await self.get_posts_by_status("approved", limit)
 
+    async def get_oldest_approved_post(self) -> Optional[Dict[str, Any]]:
+        """Get the single oldest approved post for scheduled publishing."""
+        cursor = await self._db.execute(
+            "SELECT * FROM posts WHERE status = 'approved' ORDER BY created_at ASC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
     async def get_stats(self) -> Dict[str, int]:
         """Get post statistics."""
         stats = {}

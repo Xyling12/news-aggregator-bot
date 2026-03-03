@@ -471,26 +471,71 @@ async def cb_sources(callback: CallbackQuery):
 
 @router.callback_query(F.data == "settings")
 async def cb_settings(callback: CallbackQuery):
-    """Settings button handler."""
+    """Settings button handler — interactive with change buttons."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Нет доступа", show_alert=True)
         return
 
     await callback.answer()
+    await _send_settings_menu(callback.message.chat.id)
+
+
+async def _send_settings_menu(chat_id: int):
+    """Send the interactive settings menu."""
+    pub_min = _config.publish_interval // 60
     text = (
         f"⚙️ <b>Настройки бота</b>\n\n"
         f"📡 Источников: <b>{len(_config.source_channels)}</b>\n"
+        f"📢 Канал: <b>@{_config.target_channel}</b>\n\n"
+        f"📤 Интервал публикации: <b>{pub_min} мин</b>\n"
         f"⏱ Интервал проверки: <b>{_config.check_interval} сек</b>\n"
-        f"📤 Интервал публикации: <b>{_config.publish_interval // 60} мин</b>\n"
-        f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n"
-        f"🗣 Язык: <b>{_config.language}</b>\n\n"
-        f"🚫 Фильтры:\n"
-        f"  • Реклама: <b>{len(_config.ad_stop_words)} слов</b>\n"
-        f"  • Политика: <b>{len(_config.politics_stop_words)} слов</b>\n"
-        f"  • Срочные новости: <b>{len(_config.breaking_keywords)} слов</b>\n\n"
-        f"📢 Канал: <b>@{_config.target_channel}</b>"
+        f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n\n"
+        f"🚫 Фильтры: реклама ({len(_config.ad_stop_words)}), "
+        f"политика ({len(_config.politics_stop_words)}), "
+        f"срочные ({len(_config.breaking_keywords)})\n\n"
+        f"👇 Нажми кнопку, чтобы изменить:"
     )
-    await callback.message.answer(text, parse_mode=ParseMode.HTML)
+
+    # Mark current values with ✓
+    def _pub_label(minutes):
+        marker = " ✓" if _config.publish_interval == minutes * 60 else ""
+        return f"{minutes} мин{marker}"
+
+    def _chk_label(seconds):
+        marker = " ✓" if _config.check_interval == seconds else ""
+        return f"{seconds} сек{marker}"
+
+    def _len_label(chars):
+        marker = " ✓" if _config.min_text_length == chars else ""
+        return f"{chars}{marker}"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        # Publish interval row
+        [InlineKeyboardButton(text="📤 Публикация:", callback_data="noop")],
+        [
+            InlineKeyboardButton(text=_pub_label(30), callback_data="set_pub:1800"),
+            InlineKeyboardButton(text=_pub_label(60), callback_data="set_pub:3600"),
+            InlineKeyboardButton(text=_pub_label(120), callback_data="set_pub:7200"),
+            InlineKeyboardButton(text=_pub_label(180), callback_data="set_pub:10800"),
+        ],
+        # Check interval row
+        [InlineKeyboardButton(text="⏱ Проверка каналов:", callback_data="noop")],
+        [
+            InlineKeyboardButton(text=_chk_label(30), callback_data="set_chk:30"),
+            InlineKeyboardButton(text=_chk_label(60), callback_data="set_chk:60"),
+            InlineKeyboardButton(text=_chk_label(120), callback_data="set_chk:120"),
+            InlineKeyboardButton(text=_chk_label(300), callback_data="set_chk:300"),
+        ],
+        # Min text length row
+        [InlineKeyboardButton(text="📏 Мин. длина текста:", callback_data="noop")],
+        [
+            InlineKeyboardButton(text=_len_label(50), callback_data="set_len:50"),
+            InlineKeyboardButton(text=_len_label(100), callback_data="set_len:100"),
+            InlineKeyboardButton(text=_len_label(200), callback_data="set_len:200"),
+            InlineKeyboardButton(text=_len_label(300), callback_data="set_len:300"),
+        ],
+    ])
+    await _bot.send_message(chat_id, text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "add_source")
@@ -718,6 +763,64 @@ async def cb_dismiss(callback: CallbackQuery):
     """Dismiss a notification."""
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
+
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(callback: CallbackQuery):
+    """No-op handler for label-only buttons."""
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("set_pub:"))
+async def cb_set_publish_interval(callback: CallbackQuery):
+    """Change publish interval."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    seconds = int(callback.data.split(":")[1])
+    _config.publish_interval = seconds
+    await _db.set_setting("publish_interval", str(seconds))
+    await callback.answer(f"✅ Интервал публикации: {seconds // 60} мин")
+    # Refresh settings menu
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _send_settings_menu(callback.message.chat.id)
+
+
+@router.callback_query(F.data.startswith("set_chk:"))
+async def cb_set_check_interval(callback: CallbackQuery):
+    """Change channel check interval."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    seconds = int(callback.data.split(":")[1])
+    _config.check_interval = seconds
+    await _db.set_setting("check_interval", str(seconds))
+    await callback.answer(f"✅ Интервал проверки: {seconds} сек")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _send_settings_menu(callback.message.chat.id)
+
+
+@router.callback_query(F.data.startswith("set_len:"))
+async def cb_set_min_length(callback: CallbackQuery):
+    """Change minimum text length."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+    chars = int(callback.data.split(":")[1])
+    _config.min_text_length = chars
+    await _db.set_setting("min_text_length", str(chars))
+    await callback.answer(f"✅ Мин. длина: {chars} символов")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _send_settings_menu(callback.message.chat.id)
 
 
 # ── Helper Functions ─────────────────────────────────────────────────────
@@ -1075,33 +1178,29 @@ async def process_new_post(post_id: int):
 # ── Auto-Publish Scheduler ───────────────────────────────────────────────
 
 async def auto_publish_loop():
-    """Background task: auto-publish approved posts on schedule."""
+    """Background task: publish ONE approved post per interval for even distribution."""
+    # Load saved settings from DB on startup
+    try:
+        await _config.reload_from_db(_db)
+        logger.info(f"Loaded settings from DB: publish_interval={_config.publish_interval}s")
+    except Exception as e:
+        logger.warning(f"Could not load settings from DB: {e}")
+
     while True:
         try:
             interval = _config.publish_interval if _config else 7200
             await asyncio.sleep(interval)
 
-            approved = await _db.get_approved_posts()
-            if not approved:
+            # Publish ONE post (oldest approved)
+            post = await _db.get_oldest_approved_post()
+            if not post:
                 continue
 
-            published_count = 0
-            for post in approved:
-                success = await _publish_post(post)
-                if success:
-                    published_count += 1
-                await asyncio.sleep(2)  # Space out posts
-
-            if published_count > 0:
-                logger.info(f"Auto-publisher: published {published_count} posts")
-                for admin_id in _config.admin_ids:
-                    try:
-                        await _bot.send_message(
-                            admin_id,
-                            f"📢 Авто-публикация: опубликовано {published_count} постов.",
-                        )
-                    except Exception:
-                        pass
+            success = await _publish_post(post)
+            if success:
+                logger.info(
+                    f"📢 Scheduled publish: post #{post['id']} from @{post['source_channel']}"
+                )
 
         except asyncio.CancelledError:
             break
