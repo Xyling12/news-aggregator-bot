@@ -1125,13 +1125,16 @@ async def _publish_post(post: dict) -> bool:
 
         logger.info(f"Published post #{post['id']} to {target}")
 
-        # VK crosspost
+        # VK crosspost — only use real downloadable URLs, NOT Telegram file_ids
         if _vk_publisher and _vk_publisher.enabled:
             try:
-                vk_photo = replacement_url or media_url or None
+                # replacement_url is a real Unsplash/Pexels URL — safe for VK
+                # media_url is a Telegram file_id — VK cannot download it, skip it
+                vk_photo = replacement_url or None
                 await _vk_publisher.publish(text, photo_url=vk_photo)
             except Exception as vk_err:
                 logger.warning(f"VK crosspost failed for post #{post['id']}: {vk_err}")
+
 
         # MAX crosspost
         if _max_publisher and _max_publisher.enabled:
