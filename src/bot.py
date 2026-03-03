@@ -1054,18 +1054,19 @@ async def process_new_post(post_id: int):
         rewritten = original_text
         logger.warning(f"Post #{post_id}: AI rewrite failed, using original text")
 
-    # Step 2: Generate hashtags
-    hashtags = await _rewriter.generate_hashtags(rewritten)
-
-    # Step 2.5: Format post with premium template
-    rewritten = _format_post(rewritten, hashtags)
-
-    # Step 2.6: Deduplicate by REWRITTEN text — catch «same news, different words» duplicates
+    # Step 2: Deduplicate by REWRITTEN text BEFORE formatting
+    # (must be done before format_post adds the same footer/hashtags to every post)
     published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=48)
     if _is_similar_to_any(rewritten, published_rewritten):
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
         return
+
+    # Step 2.5: Generate hashtags
+    hashtags = await _rewriter.generate_hashtags(rewritten)
+
+    # Step 2.6: Format post with premium template
+    rewritten = _format_post(rewritten, hashtags)
 
     await _db.update_post_rewrite(post_id, rewritten)
 

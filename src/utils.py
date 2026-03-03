@@ -111,9 +111,9 @@ def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
         if not existing or existing == text:
             continue
         similarity = 1.0 - rewriter.calculate_uniqueness(text, existing)
-        if similarity > 0.65:
+        if similarity > 0.82:
             return True
-        if word_overlap(text, existing) > 0.70:
+        if word_overlap(text, existing) > 0.85:
             return True
     return False
 
