@@ -862,8 +862,8 @@ def _format_post(text: str, hashtags: list) -> str:
         parts.append(" ".join(hashtags))
         parts.append("")
 
-    # Premium CTA footer
-    parts.append("😊 <a href=\"https://t.me/IzhevskTodayNews\">Подписаться</a> | 📩 <a href=\"https://t.me/IzhevskTodayBot\">Прислать новость</a>")
+    # Premium CTA footer (plain text — renders well in both TG and VK)
+    parts.append("📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot")
 
     return "\n".join(parts)
 
