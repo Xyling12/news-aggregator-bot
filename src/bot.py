@@ -1157,17 +1157,63 @@ async def process_new_post(post_id: int):
 
     await _db.update_post_rewrite(post_id, rewritten)
 
-    # Step 3: Find unique stock photo (always try for unique content)
+    # Step 3: Find unique stock photo (EVERY post must have a photo)
+    stock_url = None
     try:
+        # Method 1: AI-generated keywords
         keywords = await _rewriter.generate_keywords(original_text)
         if keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords)
             if stock_photos:
                 stock_url = stock_photos[0]["url"]
-                await _db.update_post_media(post_id, replacement_url=stock_url)
-                logger.info(f"Post #{post_id}: stock photo found for '{' '.join(keywords)}'")
+                logger.info(f"Post #{post_id}: stock photo found (AI keywords: {' '.join(keywords)})")
     except Exception as e:
-        logger.error(f"Post #{post_id}: stock photo search failed: {e}")
+        logger.warning(f"Post #{post_id}: AI keyword generation failed: {e}")
+
+    # Method 2: Simple keyword extraction (fallback if AI unavailable)
+    if not stock_url:
+        try:
+            import re as _re
+            # Extract long meaningful words from text
+            words = _re.findall(r'[а-яёА-ЯЁ]{6,}', original_text)
+            # Pick top unique words (skip common ones)
+            common = {'который', 'которая', 'которые', 'однако', 'несколько', 'сообщил', 'сообщила',
+                      'сообщили', 'рассказал', 'рассказала', 'отметил', 'отметила', 'заявил',
+                      'является', 'составил', 'составила', 'сделать', 'поэтому', 'например',
+                      'очередной', 'основных', 'обратить', 'сегодня', 'которое', 'связано',
+                      'получить', 'возможно', 'подробнее', 'источник', 'подписать', 'читайте'}
+            unique_words = []
+            seen = set()
+            for w in words:
+                wl = w.lower()
+                if wl not in common and wl not in seen:
+                    seen.add(wl)
+                    unique_words.append(wl)
+                    if len(unique_words) >= 3:
+                        break
+            if unique_words:
+                stock_photos = await _media_processor.search_stock_photo(unique_words)
+                if stock_photos:
+                    stock_url = stock_photos[0]["url"]
+                    logger.info(f"Post #{post_id}: stock photo found (text keywords: {' '.join(unique_words)})")
+        except Exception as e2:
+            logger.warning(f"Post #{post_id}: fallback keyword extraction failed: {e2}")
+
+    # Method 3: Generic topic photo (last resort)
+    if not stock_url:
+        try:
+            generic_queries = ["city news", "Izhevsk Russia", "urban life", "newspaper"]
+            for query in generic_queries:
+                stock_photos = await _media_processor.search_stock_photo([query])
+                if stock_photos:
+                    stock_url = stock_photos[0]["url"]
+                    logger.info(f"Post #{post_id}: generic stock photo found ({query})")
+                    break
+        except Exception as e3:
+            logger.warning(f"Post #{post_id}: generic photo search failed: {e3}")
+
+    if stock_url:
+        await _db.update_post_media(post_id, replacement_url=stock_url)
 
     # Step 3b: Watermark detection on original photo
     if post["media_type"] == "photo" and post.get("media_local_path"):
