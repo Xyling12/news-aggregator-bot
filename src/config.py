@@ -71,6 +71,14 @@ class Config:
         "предвыборн", "агитация", "пропаганда",
     ])
 
+    # Low-value content filter (weather, horoscopes, etc.)
+    lowvalue_stop_words: List[str] = field(default_factory=lambda: [
+        "погода", "прогноз погоды", "температура воздуха", "облачно",
+        "осадки", "давление мм", "ветер м/с", "гороскоп",
+        "знак зодиака", "лунный календарь", "цитата дня",
+        "утренняя зарядка", "доброе утро", "с добрым утром",
+    ])
+
     # Breaking news keywords (auto-publish without moderation)
     breaking_keywords: List[str] = field(default_factory=lambda: [
         "срочно", "молния", "breaking", "экстренно", "внимание",

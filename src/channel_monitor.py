@@ -251,7 +251,7 @@ class ChannelMonitor:
     async def _download_media(
         self, url: str, channel: str, msg_id: int
     ) -> Optional[str]:
-        """Download a photo from URL."""
+        """Download a photo from URL with retry."""
         if not self._session:
             return None
 
@@ -267,14 +267,24 @@ class ChannelMonitor:
         filename = f"{channel}_{msg_id}{ext}"
         filepath = os.path.join(self.config.media_dir, filename)
 
-        try:
-            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status == 200:
-                    with open(filepath, "wb") as f:
-                        f.write(await resp.read())
-                    logger.info(f"Downloaded media: {filepath}")
-                    return filepath
-        except Exception as e:
-            logger.error(f"Media download error: {e}")
+        for attempt in range(2):
+            try:
+                async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        if len(data) > 1000:  # Sanity check: skip tiny/empty responses
+                            with open(filepath, "wb") as f:
+                                f.write(data)
+                            logger.info(f"Downloaded media: {filepath} ({len(data)} bytes)")
+                            return filepath
+                        else:
+                            logger.warning(f"Media too small ({len(data)} bytes), skipping: {url}")
+                    else:
+                        logger.warning(f"Media download HTTP {resp.status} (attempt {attempt+1}): {url}")
+            except Exception as e:
+                logger.error(f"Media download error (attempt {attempt+1}): {e}")
+
+            if attempt == 0:
+                await asyncio.sleep(2)  # Wait before retry
 
         return None

@@ -492,6 +492,7 @@ async def _send_settings_menu(chat_id: int):
         f"📏 Мин. длина текста: <b>{_config.min_text_length} символов</b>\n\n"
         f"🚫 Фильтры: реклама ({len(_config.ad_stop_words)}), "
         f"политика ({len(_config.politics_stop_words)}), "
+        f"мусор ({len(_config.lowvalue_stop_words)}), "
         f"срочные ({len(_config.breaking_keywords)})\n\n"
         f"👇 Нажми кнопку, чтобы изменить:"
     )
@@ -1012,13 +1013,19 @@ async def _publish_post(post: dict) -> bool:
                 photo_source = media_url
 
             if photo_source:
-                msg = await _bot.send_photo(
-                    target,
-                    photo=photo_source,
-                    caption=text[:1024],
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
+                try:
+                    msg = await _bot.send_photo(
+                        target,
+                        photo=photo_source,
+                        caption=text[:1024],
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception as photo_err:
+                    logger.warning(f"Photo send failed ({photo_err}), publishing as text")
+                    photo_source = None
+
+            if not photo_source:
+                # Fallback: publish as text if photo unavailable
                 msg = await _bot.send_message(
                     target,
                     text[:4096],
@@ -1067,6 +1074,13 @@ async def process_new_post(post_id: int):
     if len(politics_matches) >= 2:  # 2+ political keywords = politics
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: politics (matched: {', '.join(politics_matches[:3])})")
+        return
+
+    # Step 0a3: Low-value content filter — skip weather, horoscopes, etc.
+    lowvalue_matches = [w for w in _config.lowvalue_stop_words if w in text_lower]
+    if len(lowvalue_matches) >= 1:  # Even 1 match = low-value (these are very specific)
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: low-value content (matched: {', '.join(lowvalue_matches[:3])})")
         return
 
     # Step 0b: Relevance filter for federal channels
