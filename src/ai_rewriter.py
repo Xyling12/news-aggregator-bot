@@ -456,8 +456,24 @@ class AIRewriter:
             return []
 
         try:
-            prompt = f"""Извлеки 3-5 ключевых слов на английском из этого новостного текста для поиска подходящего стокового фото.
-Верни ТОЛЬКО слова через запятую, без объяснений.
+            prompt = f"""Ты помогаешь найти подходящее стоковое фото для новости.
+
+Задача: придумай 3-4 ключевых слова НА АНГЛИЙСКОМ для поиска фото на Unsplash.
+
+ПРАВИЛА:
+- Слова должны описывать ВИЗУАЛЬНЫЙ ПРЕДМЕТ новости (что показать на фото)
+- НЕ используй абстрактные слова (news, information, article)
+- Используй конкретные, фотогеничные понятия
+- Первое слово — ГЛАВНЫЙ объект новости
+
+Примеры:
+- Новость про строительство спорткомплекса → "sports complex, construction, building, gym"  
+- Новость про пожар в доме → "fire, apartment building, firefighters, flames"
+- Новость про зарплаты учителей → "teacher, classroom, school, education"
+- Новость про ремонт дороги → "road construction, asphalt, highway, roadwork"
+- Новость про QR-коды → "QR code, mobile payment, smartphone, digital"
+
+Ответь ТОЛЬКО словами через запятую, без объяснений.
 
 Текст: {text[:500]}"""
 
@@ -469,6 +485,9 @@ class AIRewriter:
 
             if response and response.text:
                 keywords = [kw.strip().lower() for kw in response.text.strip().split(",")]
+                # Filter out generic/useless keywords
+                bad_keywords = {"news", "information", "article", "report", "update", "story", "newspaper"}
+                keywords = [kw for kw in keywords if kw and kw not in bad_keywords]
                 return keywords[:5]
 
         except Exception as e:
