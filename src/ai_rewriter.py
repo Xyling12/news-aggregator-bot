@@ -112,6 +112,34 @@ RELEVANCE_PROMPT = """Ты — редактор новостного канал�
 Новость: {text}"""
 
 
+# Phrases that indicate AI refused to process the text (safety/policy filters)
+REFUSAL_PHRASES = [
+    "я не могу обсуждать",
+    "не могу помочь с этим",
+    "я не в состоянии",
+    "не могу выполнить",
+    "я не могу создать",
+    "я не могу написать",
+    "я не могу переписать",
+    "я не могу обработать",
+    "давайте поговорим о чём-нибудь",
+    "давайте сменим тему",
+    "не могу генерировать",
+    "не соответствует правилам",
+    "нарушает правила",
+    "i cannot",
+    "i can't",
+    "i'm unable to",
+    "i am unable to",
+    "as an ai",
+    "i'm not able to",
+    "i apologize, but",
+    "извините, но я не",
+    "к сожалению, я не могу",
+    "мне не следует",
+]
+
+
 class AIRewriter:
     """Rewrites news text using AI to create unique content."""
 
@@ -240,6 +268,12 @@ class AIRewriter:
 
                 if response and response.text:
                     rewritten = response.text.strip()
+                    
+                    # Check for AI refusal
+                    if self._is_refusal(rewritten):
+                        logger.warning(f"Gemini [{model_name}]: REFUSAL detected, skipping: {rewritten[:80]}")
+                        continue  # Try next model
+                    
                     if len(rewritten) > 50 and rewritten != text:
                         uniqueness = self.calculate_uniqueness(text, rewritten)
                         logger.info(f"Gemini [{model_name}]: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
@@ -260,7 +294,10 @@ class AIRewriter:
                                 ),
                             )
                             if response2 and response2.text:
-                                return response2.text.strip()
+                                retry_text = response2.text.strip()
+                                if not self._is_refusal(retry_text):
+                                    return retry_text
+                                logger.warning(f"Gemini [{model_name}]: retry also refused")
                             return rewritten  # Use low-uniqueness version as last resort
                     else:
                         logger.warning(f"Gemini [{model_name}]: too short or identical")
@@ -325,7 +362,10 @@ class AIRewriter:
                         alternatives = result.get("alternatives", [])
                         if alternatives:
                             rewritten = alternatives[0].get("message", {}).get("text", "").strip()
-                            if rewritten and len(rewritten) > 50 and rewritten != text:
+                            # Check for AI refusal
+                            if self._is_refusal(rewritten):
+                                logger.warning(f"YandexGPT: REFUSAL detected: {rewritten[:80]}")
+                            elif rewritten and len(rewritten) > 50 and rewritten != text:
                                 uniqueness = self.calculate_uniqueness(text, rewritten)
                                 logger.info(
                                     f"YandexGPT: uniqueness {uniqueness:.0%} "
@@ -435,6 +475,20 @@ class AIRewriter:
             logger.error(f"Keyword extraction failed: {e}")
 
         return []
+
+    @staticmethod
+    def _is_refusal(text: str) -> bool:
+        """Check if AI response is a refusal/safety-filter message."""
+        if not text:
+            return True
+        text_lower = text.lower().strip()
+        for phrase in REFUSAL_PHRASES:
+            if phrase in text_lower:
+                return True
+        # Also reject if response is suspiciously short and generic
+        if len(text_lower) < 80 and ("не могу" in text_lower or "давайте" in text_lower):
+            return True
+        return False
 
     def calculate_uniqueness(self, original: str, rewritten: str) -> float:
         """
