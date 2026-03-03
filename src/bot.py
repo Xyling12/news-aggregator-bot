@@ -699,16 +699,45 @@ async def cb_search_photo(callback: CallbackQuery):
     if not post:
         return
 
-    # Extract keywords
+    # Extract keywords: Method 1 — AI
     text = post.get("rewritten_text") or post["original_text"]
+    original_text = post["original_text"]
     keywords = await _rewriter.generate_keywords(text)
 
+    # Method 2: Simple keyword extraction from text (fallback)
     if not keywords:
-        await callback.message.reply("❌ Не удалось извлечь ключевые слова для поиска.")
-        return
+        import re as _re
+        common = {'который', 'которая', 'которые', 'однако', 'несколько', 'сообщил', 'сообщила',
+                  'сообщили', 'рассказал', 'рассказала', 'отметил', 'отметила', 'заявил',
+                  'является', 'составил', 'составила', 'сделать', 'поэтому', 'например',
+                  'очередной', 'основных', 'обратить', 'сегодня', 'которое', 'связано',
+                  'получить', 'возможно', 'подробнее', 'источник', 'подписать', 'читайте'}
+        words = _re.findall(r'[а-яёА-ЯЁ]{6,}', original_text)
+        unique_words = []
+        seen = set()
+        for w in words:
+            wl = w.lower()
+            if wl not in common and wl not in seen:
+                seen.add(wl)
+                unique_words.append(wl)
+                if len(unique_words) >= 3:
+                    break
+        if unique_words:
+            keywords = unique_words
+            logger.info(f"Photo search: using text-extracted keywords: {keywords}")
+
+    # Method 3: Generic fallback
+    if not keywords:
+        keywords = ["city news", "Izhevsk Russia", "urban life"]
+        logger.info("Photo search: using generic fallback keywords")
 
     # Search stock photos
     photos = await _media_processor.search_stock_photo(keywords, count=3)
+
+    # Generic retry if specific keywords found nothing
+    if not photos and keywords != ["city news", "Izhevsk Russia", "urban life"]:
+        photos = await _media_processor.search_stock_photo(["city news", "urban life"], count=3)
+
     if not photos:
         await callback.message.reply(f"📷 Фото не найдены. Ключевые слова: {', '.join(keywords)}")
         return
