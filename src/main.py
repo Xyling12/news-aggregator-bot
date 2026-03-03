@@ -62,6 +62,7 @@ async def main():
     rewriter = AIRewriter(config)
     media_proc = MediaProcessor(
         unsplash_key=config.unsplash_access_key,
+        pexels_key=config.pexels_api_key,
         media_dir=config.media_dir,
     )
 

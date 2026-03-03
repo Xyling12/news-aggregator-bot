@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 class MediaProcessor:
     """Processes media files: watermark detection and stock photo search."""
 
-    def __init__(self, unsplash_key: str = "", media_dir: str = "media"):
+    def __init__(self, unsplash_key: str = "", pexels_key: str = "", media_dir: str = "media"):
         self.unsplash_key = unsplash_key
+        self.pexels_key = pexels_key
         self.media_dir = media_dir
         os.makedirs(media_dir, exist_ok=True)
 
@@ -83,15 +84,67 @@ class MediaProcessor:
 
     async def search_stock_photo(self, keywords: List[str], count: int = 3) -> List[dict]:
         """
-        Search for stock photos using Unsplash API.
+        Search for stock photos. Tries Pexels first (supports Russian), then Unsplash.
         
         Returns:
             List of dicts with 'url', 'thumb_url', 'description', 'author'
         """
-        if not self.unsplash_key:
-            logger.warning("Unsplash API key not configured")
-            return []
+        # Try Pexels first (better Russian support)
+        if self.pexels_key:
+            results = await self._search_pexels(keywords, count)
+            if results:
+                return results
 
+        # Fallback to Unsplash
+        if self.unsplash_key:
+            results = await self._search_unsplash(keywords, count)
+            if results:
+                return results
+
+        logger.warning("No stock photo API keys configured")
+        return []
+
+    async def _search_pexels(self, keywords: List[str], count: int = 3) -> List[dict]:
+        """Search Pexels API (supports Russian queries)."""
+        query = " ".join(keywords[:3])
+        results = []
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = "https://api.pexels.com/v1/search"
+                params = {
+                    "query": query,
+                    "per_page": count,
+                    "orientation": "landscape",
+                    "locale": "ru-RU",
+                }
+                headers = {
+                    "Authorization": self.pexels_key,
+                }
+
+                async with session.get(url, params=params, headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for photo in data.get("photos", []):
+                            results.append({
+                                "url": photo["src"]["large2x"],
+                                "thumb_url": photo["src"]["medium"],
+                                "description": photo.get("alt", ""),
+                                "author": photo.get("photographer", "Pexels"),
+                            })
+                        logger.info(f"Pexels: found {len(results)} photos for '{query}'")
+                    else:
+                        error = await resp.text()
+                        logger.error(f"Pexels API returned {resp.status}: {error}")
+
+        except Exception as e:
+            logger.error(f"Pexels search failed: {e}")
+
+        return results
+
+    async def _search_unsplash(self, keywords: List[str], count: int = 3) -> List[dict]:
+        """Search Unsplash API (English keywords recommended)."""
         query = " ".join(keywords[:3])
         results = []
 
@@ -107,7 +160,8 @@ class MediaProcessor:
                     "Authorization": f"Client-ID {self.unsplash_key}",
                 }
 
-                async with session.get(url, params=params, headers=headers) as resp:
+                async with session.get(url, params=params, headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for photo in data.get("results", []):
@@ -116,15 +170,14 @@ class MediaProcessor:
                                 "thumb_url": photo["urls"]["thumb"],
                                 "description": photo.get("description", ""),
                                 "author": photo["user"]["name"],
-                                "unsplash_link": photo["links"]["html"],
                             })
-                        logger.info(f"Found {len(results)} stock photos for '{query}'")
+                        logger.info(f"Unsplash: found {len(results)} photos for '{query}'")
                     else:
                         error = await resp.text()
                         logger.error(f"Unsplash API returned {resp.status}: {error}")
 
         except Exception as e:
-            logger.error(f"Stock photo search failed: {e}")
+            logger.error(f"Unsplash search failed: {e}")
 
         return results
 
