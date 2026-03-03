@@ -237,11 +237,11 @@ class VKPublisher:
 
 
 
-        # Add clean VK footer with native hyperlinks (shown as clickable words, not raw URLs)
+        # Add clean VK footer with plain URLs (VK auto-links them)
         vk_text += (
             "\n\n"
-            "[https://t.me/IzhevskTodayNews|📱 Telegram-канал] | "
-            "[https://vk.com/im?sel=-236380336|📩 Прислать новость в ВК]"
+            "📱 Telegram: https://t.me/IzhevskTodayNews\n"
+            "📩 Прислать новость: https://m.vk.com/mail?community=236380336"
         )
 
         params = {

@@ -481,7 +481,7 @@ class AIRewriter:
     async def generate_keywords(self, text: str) -> list[str]:
         """Extract keywords from text for stock photo search."""
         if not self._gemini_model:
-            return []
+            return self._extract_keywords_fallback(text)
 
         try:
             prompt = f"""Ты помогаешь найти подходящее стоковое фото для новости.
@@ -521,7 +521,35 @@ class AIRewriter:
         except Exception as e:
             logger.error(f"Keyword extraction failed: {e}")
 
-        return []
+        # Fallback: topic-based keyword mapping without AI
+        return self._extract_keywords_fallback(text)
+
+    @staticmethod
+    def _extract_keywords_fallback(text: str) -> list[str]:
+        """Extract stock photo keywords using topic dictionary (no AI needed)."""
+        text_lower = text.lower()
+        topic_map = [
+            (["пожар", "горит", "огонь", "возгорание"], ["fire", "firefighters", "flames"]),
+            (["авария", "дтп", "столкновение"], ["car accident", "traffic", "road"]),
+            (["полиция", "задержан", "арест", "преступ"], ["police", "law enforcement", "justice"]),
+            (["больниц", "медицин", "врач", "здоровь"], ["hospital", "doctor", "healthcare"]),
+            (["школ", "образован", "учител", "студент"], ["school", "education", "classroom"]),
+            (["строительств", "ремонт", "дорог", "стройк"], ["construction", "road", "workers"]),
+            (["экономик", "цен", "рубл", "инфляц", "зарплат"], ["economy", "finance", "money"]),
+            (["погода", "снег", "мороз", "дождь"], ["weather", "winter", "nature"]),
+            (["суд", "закон", "право"], ["court", "justice", "law"]),
+            (["спорт", "матч", "команд", "чемпион"], ["sport", "competition", "athletes"]),
+            (["армия", "воен", "солдат", "флот", "вмс", "нато"], ["military", "navy", "defense"]),
+            (["нефт", "газ", "топлив", "энерг"], ["oil", "gas", "energy"]),
+            (["выбор", "политик", "депутат", "власт"], ["politics", "government", "parliament"]),
+            (["технолог", "цифров", "интернет"], ["technology", "digital", "innovation"]),
+            (["жкх", "коммунал", "отоплен"], ["city infrastructure", "heating", "utilities"]),
+            (["транспорт", "автобус", "трамвай"], ["public transport", "bus", "city"]),
+        ]
+        for keywords_ru, keywords_en in topic_map:
+            if any(kw in text_lower for kw in keywords_ru):
+                return keywords_en
+        return ["city", "news", "building"]
 
     @staticmethod
     def _is_refusal(text: str) -> bool:
