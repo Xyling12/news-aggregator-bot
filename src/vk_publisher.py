@@ -141,7 +141,7 @@ class VKPublisher:
         # Step 1: Get upload server URL
         upload_server = await self._api_call(
             "photos.getWallUploadServer",
-            group_id=self.group_id,
+            group_id=int(self.group_id),
         )
         if not upload_server:
             return None
@@ -199,7 +199,7 @@ class VKPublisher:
         # Step 4: Save the uploaded photo
         save_result = await self._api_call(
             "photos.saveWallPhoto",
-            group_id=self.group_id,
+            group_id=int(self.group_id),
             photo=upload_result["photo"],
             server=upload_result["server"],
             hash=upload_result["hash"],
@@ -245,7 +245,7 @@ class VKPublisher:
         )
 
         params = {
-            "owner_id": f"-{self.group_id}",
+            "owner_id": -int(self.group_id),
             "from_group": 1,
             "message": vk_text,
         }
