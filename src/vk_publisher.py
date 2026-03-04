@@ -241,7 +241,7 @@ class VKPublisher:
         vk_text += (
             "\n\n"
             "📱 Telegram: https://t.me/IzhevskTodayNews\n"
-            "📩 Прислать новость: https://m.vk.com/mail?community=236380336"
+            "📩 Прислать новость: https://vk.com/im/convo/-236380336?entrypoint=community_page&tab=all"
         )
 
         params = {
