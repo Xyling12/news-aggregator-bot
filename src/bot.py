@@ -1043,8 +1043,8 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: similar to published post")
         return
 
-    # Tier 2: Compare against QUEUED posts (approved) — first-in-queue wins, later duplicates rejected
-    queued_texts = await _db.get_texts_by_status(["approved", "rewriting"], hours=24)
+    # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
+    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
     if _is_similar_to_any(original_text, queued_texts):
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: similar post already in queue")
