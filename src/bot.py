@@ -1029,9 +1029,10 @@ async def _publish_post(post: dict) -> bool:
     # ── Cross-post to VK ──────────────────────────────────────────────────
     if _vk_publisher and _vk_publisher.enabled:
         try:
-            photo_for_vk = post.get("replacement_media_url") or post.get("media_file_id")
-            if not photo_for_vk:
-                photo_for_vk = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&q=80"
+            photo_for_vk = (
+                post.get("replacement_media_url")
+                or "https://images.unsplash.com/photo-1564769662533-4f00a87b4056?w=1200&q=80"
+            )
             logger.info(f"Post #{post['id']}: starting VK crosspost (photo={'yes' if photo_for_vk else 'no'})")
             vk_post_id = await _vk_publisher.publish(text, photo_url=photo_for_vk)
             if vk_post_id:
