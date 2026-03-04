@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import re
+from datetime import datetime
 from typing import Callable, Optional, List
 from html import unescape
 
@@ -142,6 +143,12 @@ class ChannelMonitor:
                     )
                 except Exception as e:
                     logger.error(f"Media download failed: {e}")
+
+            # Skip weather forecast posts during morning (6-11 AM) — we generate our own at 7:00
+            if self._is_weather_report(text) and 6 <= datetime.now().hour <= 11:
+                logger.info(f"@{channel_username}: skipping scraped weather report (scheduler handles this)")
+                await self.db.update_last_message_id(channel_username, msg_id)
+                continue
 
             # Save to database (store remote URL in media_file_id for fallback)
             post_id = await self.db.add_post(
@@ -288,3 +295,22 @@ class ChannelMonitor:
                 await asyncio.sleep(2)  # Wait before retry
 
         return None
+
+    @staticmethod
+    def _is_weather_report(text: str) -> bool:
+        """Return True if text looks like a weather forecast/report.
+
+        Requires a temperature reading (digit + ° sign OR 'градус') AND at least
+        2 weather-specific words so incidental mentions do not get caught.
+        """
+        lower = text.lower()
+        has_temperature = bool(
+            re.search(r'-?\d+\s*°', text) or 'градус' in lower
+        )
+        weather_words = [
+            'температур', 'ветер', 'влажн', 'давлен',
+            'облачн', 'снегопад', 'мороз', 'погода',
+            'прогноз', 'осадк', 'ясно', 'метель',
+        ]
+        hits = sum(1 for w in weather_words if w in lower)
+        return has_temperature and hits >= 2
