@@ -150,13 +150,19 @@ class MediaProcessor:
                             for item in data.get("query", {}).get("search", [])
                         ]
 
-                query = " ".join(["Izhevsk"] + keywords[:3])  # Always anchor to Izhevsk
+                query = " ".join(["Izhevsk"] + keywords[:3])  # Try anchored to Izhevsk first
                 titles = await _search_titles(query)
                 if not titles:
-                    # Fallback: English keywords + Izhevsk
+                    # Fallback 1: English keywords + Izhevsk
                     en_kw = [k for k in keywords if k.isascii()][:2]
                     if en_kw:
                         titles = await _search_titles("Izhevsk " + " ".join(en_kw))
+                if not titles:
+                    # Fallback 2: keywords alone (no city) — generic topic stock photo
+                    generic_q = " ".join(keywords[:3])
+                    titles = await _search_titles(generic_q)
+                    if titles:
+                        logger.info(f"Wikimedia: using generic (non-Izhevsk) results for '{generic_q}'")
 
                 if not titles:
                     logger.info(f"Wikimedia: no results for '{query}'")

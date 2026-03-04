@@ -1089,24 +1089,42 @@ async def process_new_post(post_id: int):
 
     await _db.update_post_rewrite(post_id, rewritten)
 
-    # Step 3: Find unique stock photo (always try for unique content)
+    # Step 3: Watermark detection on original photo (FIRST, before stock search)
+    has_watermark = False
+    if post["media_type"] == "photo" and post.get("media_local_path"):
+        _has_wm, confidence = _media_processor.detect_watermark(post["media_local_path"])
+        if _has_wm:
+            has_watermark = True
+            await _db.update_post_media(post_id, has_watermark=True)
+            logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
+
+    # Step 3b: Find stock photo.
+    # Always search; mandatory if watermark detected (must replace the original).
+    # Fallback to a curated Izhevsk photo if no stock found.
+    _IZHEVSK_FALLBACK_PHOTOS = [
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Izhevsk_letom.jpg/1280px-Izhevsk_letom.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Izhevsk_city_centre.jpg/1280px-Izhevsk_city_centre.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
+    ]
     try:
         keywords = await _rewriter.generate_keywords(original_text)
+        stock_url = None
         if keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords)
             if stock_photos:
                 stock_url = stock_photos[0]["url"]
-                await _db.update_post_media(post_id, replacement_url=stock_url)
                 logger.info(f"Post #{post_id}: stock photo found for '{' '.join(keywords)}'")
+
+        if not stock_url and (has_watermark or post["media_type"] != "photo"):
+            # No stock found but we must replace: use a random Izhevsk fallback
+            import random
+            stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
+            logger.info(f"Post #{post_id}: using Izhevsk fallback photo")
+
+        if stock_url:
+            await _db.update_post_media(post_id, replacement_url=stock_url)
     except Exception as e:
         logger.error(f"Post #{post_id}: stock photo search failed: {e}")
-
-    # Step 3b: Watermark detection on original photo
-    if post["media_type"] == "photo" and post.get("media_local_path"):
-        has_watermark, confidence = _media_processor.detect_watermark(post["media_local_path"])
-        if has_watermark:
-            await _db.update_post_media(post_id, has_watermark=True)
-            logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
 
     # Step 4: Breaking news → auto-publish without moderation; regular → auto-approve for queue
     if is_breaking:
