@@ -144,11 +144,16 @@ async def cmd_start(message: Message):
             parse_mode=ParseMode.HTML,
         )
     else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📩 Прислать новость", callback_data="send_news")],
+            [InlineKeyboardButton(text="📲 Перейти на канал", url="https://t.me/IzhevskTodayNews")],
+        ])
         await message.answer(
             "📰 <b>Ижевск Сегодня</b>\n\n"
             "Привет! Я бот новостного канала @IzhevskTodayNews.\n\n"
-            "📩 Хочешь прислать новость? Нажми /news\n"
-            "📲 Подписаться: @IzhevskTodayNews",
+            "Знаешь о важном событии в Ижевске? "
+            "Нажми кнопку ниже — и мы рассмотрим твою новость для публикации 👇",
+            reply_markup=kb,
             parse_mode=ParseMode.HTML,
         )
 
@@ -158,6 +163,20 @@ async def cmd_news(message: Message, state: FSMContext):
     """Start news submission from any user."""
     await state.set_state(SendNewsStates.waiting_for_news)
     await message.answer(
+        "📩 <b>Прислать новость</b>\n\n"
+        "Отправь мне текст или фото с описанием новости.\n"
+        "Если новость интересная — мы опубликуем её на канале!\n\n"
+        "Для отмены нажми /cancel",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == "send_news")
+async def cb_send_news(callback: CallbackQuery, state: FSMContext):
+    """Handle 'Прислать новость' button from /start menu."""
+    await callback.answer()
+    await state.set_state(SendNewsStates.waiting_for_news)
+    await callback.message.answer(
         "📩 <b>Прислать новость</b>\n\n"
         "Отправь мне текст или фото с описанием новости.\n"
         "Если новость интересная — мы опубликуем её на канале!\n\n"
