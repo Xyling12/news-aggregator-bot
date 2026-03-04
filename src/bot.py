@@ -480,6 +480,38 @@ async def cmd_test_ai(message: Message):
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("testvk"))
+async def cmd_test_vk(message: Message):
+    """Test VK API connection — admin only diagnostic."""
+    if not is_admin(message.from_user.id):
+        return
+
+    if not _vk_publisher:
+        await message.answer("❌ VK publisher not initialized (bot restarting?)")
+        return
+
+    lines = ["🔍 <b>Диагностика VK</b>\n"]
+    lines.append(f"🔑 Токен: {'✅ SET (' + _vk_publisher.access_token[:8] + '...)' if _vk_publisher.access_token else '❌ НЕ ЗАДАН'}")
+    lines.append(f"👥 Group ID: {'✅ ' + _vk_publisher.group_id if _vk_publisher.group_id else '❌ НЕ ЗАДАН'}")
+    lines.append(f"📡 Enabled: {'✅ Да' if _vk_publisher.enabled else '❌ Нет'}")
+
+    if _vk_publisher.enabled:
+        lines.append("\n⏳ Проверяю соединение с VK API...")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+        result = await _vk_publisher.test_connection()
+        status_lines = [
+            f"\n📊 <b>Результат проверки:</b>",
+            f"Status: {'✅ OK' if result.get('status') == 'ok' else '❌ ERROR'}",
+        ]
+        if result.get('group_name'):
+            status_lines.append(f"Группа: {result['group_name']}")
+            status_lines.append(f"URL: {result.get('group_url', '')}")
+        await message.answer("\n".join(status_lines), parse_mode=ParseMode.HTML)
+    else:
+        lines.append("\n⛔ VK crosspost отключён — задайте VK_ACCESS_TOKEN и VK_GROUP_ID в Dokploy.")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 @router.message(Command("publish"))
 async def cmd_publish(message: Message):
     """Publish all approved posts with delays between them."""
@@ -927,19 +959,26 @@ async def _send_review_post(chat_id: int, post: dict):
 
 
 async def _publish_post(post: dict) -> bool:
-    """Publish a post to the target channel."""
+    """Publish a post to the target channel.
+
+    If sending with a photo fails (bad URL, expired file_id, etc.),
+    falls back to text-only. If even text fails, marks the post as
+    'publish_failed' so it does not block the auto-publish queue forever.
+    """
     text = post.get("rewritten_text") or post["original_text"]
     target = _config.target_channel
 
     if not target.startswith("@") and not target.startswith("-"):
         target = f"@{target}"
 
-    try:
-        media_path = post.get("media_local_path")
-        media_url = post.get("media_file_id")  # Remote URL fallback
-        replacement_url = post.get("replacement_media_url")
+    media_path = post.get("media_local_path")
+    media_url = post.get("media_file_id")
+    replacement_url = post.get("replacement_media_url")
 
-        # Use replacement photo if available
+    msg = None
+
+    # ── Try to publish with photo ─────────────────────────────────────────
+    try:
         if replacement_url:
             msg = await _bot.send_photo(
                 target,
@@ -961,45 +1000,50 @@ async def _publish_post(post: dict) -> bool:
                     caption=text[:1024],
                     parse_mode=ParseMode.HTML,
                 )
-            else:
-                msg = await _bot.send_message(
-                    target,
-                    text[:4096],
-                    parse_mode=ParseMode.HTML,
-                )
-        else:
+    except Exception as photo_err:
+        logger.warning(
+            f"Post #{post['id']}: photo send failed ({photo_err}), falling back to text-only"
+        )
+
+    # ── Fallback: text-only ───────────────────────────────────────────────
+    if msg is None:
+        try:
             msg = await _bot.send_message(
                 target,
                 text[:4096],
                 parse_mode=ParseMode.HTML,
             )
+        except Exception as text_err:
+            # Even text failed — mark as failed so queue is not blocked
+            logger.error(
+                f"Post #{post['id']}: text-only fallback also failed: {text_err} — marking as publish_failed"
+            )
+            await _db.update_post_status(post["id"], "publish_failed")
+            return False
 
-        # Record publication
-        await _db.update_post_status(post["id"], "published")
-        await _db.add_published(post["id"], msg.message_id)
+    # ── Record publication ────────────────────────────────────────────────
+    await _db.update_post_status(post["id"], "published")
+    await _db.add_published(post["id"], msg.message_id)
+    logger.info(f"Published post #{post['id']} to {target}")
 
-        logger.info(f"Published post #{post['id']} to {target}")
+    # ── Cross-post to VK ──────────────────────────────────────────────────
+    if _vk_publisher and _vk_publisher.enabled:
+        try:
+            photo_for_vk = post.get("replacement_media_url") or post.get("media_file_id")
+            if not photo_for_vk:
+                photo_for_vk = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&q=80"
+            logger.info(f"Post #{post['id']}: starting VK crosspost (photo={'yes' if photo_for_vk else 'no'})")
+            vk_post_id = await _vk_publisher.publish(text, photo_url=photo_for_vk)
+            if vk_post_id:
+                logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
+            else:
+                logger.warning(f"Post #{post['id']} VK crosspost failed — publish() returned None")
+        except Exception as e:
+            logger.error(f"VK crosspost error for post #{post['id']}: {e}", exc_info=True)
+    elif _vk_publisher and not _vk_publisher.enabled:
+        logger.debug("VK crosspost skipped: token or group_id not configured")
 
-        # Cross-post to VK
-        if _vk_publisher:
-            try:
-                photo_for_vk = post.get("replacement_media_url") or post.get("media_file_id")
-                # Fallback: use a generic Izhevsk news image if no photo is available
-                if not photo_for_vk:
-                    photo_for_vk = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200&q=80"
-                vk_post_id = await _vk_publisher.publish(text, photo_url=photo_for_vk)
-                if vk_post_id:
-                    logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
-                else:
-                    logger.warning(f"Post #{post['id']} VK crosspost failed")
-            except Exception as e:
-                logger.error(f"VK crosspost error for post #{post['id']}: {e}")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to publish post #{post['id']}: {e}")
-        return False
+    return True
 
 
 # ── Post Processing Pipeline ────────────────────────────────────────────
