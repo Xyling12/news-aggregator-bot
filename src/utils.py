@@ -165,8 +165,18 @@ BREAKING_KEYWORDS = [
 
 
 def detect_rubric(text: str):
-    """Return (rubric_label, rubric_hashtag) for a post text, or (None, None)."""
-    text_lower = text.lower()
+    """Return (rubric_label, rubric_hashtag) for a post text, or (None, None).
+
+    Only scans the post body — lines that start with '#' (hashtag lines)
+    are excluded to prevent words like 'погода' inside a hashtag from
+    triggering a false rubric match.
+    """
+    # Strip hashtag lines before scanning to avoid self-referential matches
+    body_lines = [
+        line for line in text.split("\n")
+        if not line.strip().startswith("#")
+    ]
+    text_lower = " ".join(body_lines).lower()
     for label, hashtag, keywords in RUBRIC_MAP:
         if any(kw in text_lower for kw in keywords):
             return label, hashtag
