@@ -89,6 +89,7 @@ async def main():
         bot=bot,
         generator=content_gen,
         db=db,
+        rewriter=rewriter,
     )
     logger.info("Content generator & scheduler created")
 

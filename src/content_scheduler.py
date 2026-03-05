@@ -16,6 +16,7 @@ from aiogram.enums import ParseMode
 from src.config import Config
 from src.content_generator import ContentGenerator
 from src.database import Database
+from src.ai_rewriter import AIRewriter
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +46,13 @@ class ContentScheduler:
         bot: Bot,
         generator: ContentGenerator,
         db: Database,
+        rewriter: Optional[AIRewriter] = None,
     ):
         self.config = config
         self.bot = bot
         self.generator = generator
         self.db = db
+        self.rewriter = rewriter
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._published_today: set[str] = set()  # Track what was published today
@@ -194,6 +197,22 @@ class ContentScheduler:
                     parse_mode=ParseMode.HTML,
                 )
                 logger.info(f"✅ Published {label} (no photo) to {target}")
+
+            # ── Native Telegram poll (for all rubrics except digest) ──────
+            if rubric != "daily_digest" and self.rewriter:
+                try:
+                    poll_text = text
+                    poll_data = await self.rewriter.generate_poll_options(poll_text)
+                    if poll_data and poll_data.get("options"):
+                        await self.bot.send_poll(
+                            chat_id=target,
+                            question=poll_data["question"],
+                            options=poll_data["options"],
+                            is_anonymous=True,
+                        )
+                        logger.info(f"✅ Poll sent for {label}: '{poll_data['question']}'")
+                except Exception as poll_err:
+                    logger.warning(f"Poll send failed for {label}: {poll_err}")
 
             # VK crosspost
             try:
