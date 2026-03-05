@@ -525,14 +525,26 @@ class AIRewriter:
 
             if response and response.text:
                 keywords = [kw.strip().lower() for kw in response.text.strip().split(",")]
-                # Filter out generic/useless/dangerous keywords
+                # Filter out generic/useless/dangerous keywords that lead to wrong photos
                 bad_keywords = {
+                    # Generic/meta
                     "news", "information", "article", "report", "update", "story", "newspaper",
+                    # Sound/tech objects
                     "bell", "ring", "sound", "alarm", "signal", "noise", "tone", "ringtone",
-                    "pipe", "tube", "wire", "equipment", "technology", "digital", "modern",
-                    "abstract", "concept", "symbol", "icon", "background",
+                    "pipe", "tube", "wire", "equipment",
+                    # Abstract/design
+                    "abstract", "concept", "symbol", "icon", "background", "digital", "modern",
+                    "technology",
+                    # Sport/fitness — these get triggered by "движение" (movement/traffic)
+                    "climbing", "sport", "fitness", "gym", "exercise", "athlete", "workout",
+                    "athletic", "mountain", "boulder", "competition", "race", "runner",
+                    "jump", "jumping", "sports", "movement", "motion", "activity",
                 }
                 keywords = [kw for kw in keywords if kw and kw not in bad_keywords]
+                # If AI returned only bad words, fall through to reliable fallback
+                if not keywords:
+                    logger.warning("generate_keywords: all AI keywords were filtered, using fallback")
+                    return self._extract_keywords_fallback(text)
                 return keywords[:3]
 
         except Exception as e:
