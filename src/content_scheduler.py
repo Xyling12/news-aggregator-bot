@@ -134,8 +134,8 @@ class ContentScheduler:
 
         logger.info("Content scheduler loop stopped")
 
-    async def _publish_rubric(self, rubric: str, label: str):
-        """Generate and publish a rubric post directly to the channel."""
+    async def _publish_rubric(self, rubric: str, label: str) -> bool:
+        """Generate and publish a rubric post directly to the channel. Returns True on success."""
         target = self.config.target_channel
         if not target.startswith("@") and not target.startswith("-"):
             target = f"@{target}"
@@ -149,7 +149,7 @@ class ContentScheduler:
             text, photo_url = await self.generator.generate_holiday()
             if not text:  # Not a holiday today — skip silently
                 logger.info("No holiday today, skipping")
-                return
+                return True  # Not an error — just no holiday
         elif rubric == "history_fact":
             text, photo_url = await self.generator.generate_history_fact()
         elif rubric == "five_facts":
@@ -163,13 +163,12 @@ class ContentScheduler:
         elif rubric == "evening_fun":
             text, photo_url = await self.generator.generate_evening_fun()
         elif rubric == "daily_digest":
-            # Get today's published news for the digest
             published = await self.db.get_today_published_texts()
             text, photo_url = await self.generator.generate_daily_digest(published)
 
         if not text:
-            logger.warning(f"Content generation returned empty for {rubric}")
-            return
+            logger.warning(f"Content generation returned empty for {rubric} — Gemini may be rate-limited")
+            raise RuntimeError(f"AI вернул пустой текст для '{label}'. Возможно, квота Gemini исчерпана — попробуй позже.")
 
         # Publish with photo if available
         try:
