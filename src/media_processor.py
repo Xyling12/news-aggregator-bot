@@ -303,19 +303,30 @@ class MediaProcessor:
         return results
 
     async def download_stock_photo(self, photo_url: str, filename: str) -> Optional[str]:
-        """Download a stock photo and save it locally."""
+        """Download a stock photo and save it locally.
+
+        Sends a proper User-Agent to avoid 403 from Wikimedia and similar CDNs.
+        """
         try:
             filepath = os.path.join(self.media_dir, filename)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(photo_url) as resp:
+            headers = {
+                "User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"
+            }
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(
+                    photo_url, timeout=aiohttp.ClientTimeout(total=20)
+                ) as resp:
                     if resp.status == 200:
                         content = await resp.read()
-                        with open(filepath, "wb") as f:
-                            f.write(content)
-                        logger.info(f"Downloaded stock photo: {filepath}")
-                        return filepath
+                        if len(content) > 1000:  # Sanity check
+                            with open(filepath, "wb") as f:
+                                f.write(content)
+                            logger.info(f"Downloaded stock photo: {filepath}")
+                            return filepath
+                        else:
+                            logger.warning(f"Stock photo too small ({len(content)} bytes): {photo_url}")
                     else:
-                        logger.error(f"Failed to download photo: {resp.status}")
+                        logger.error(f"Failed to download photo: {resp.status} from {photo_url}")
         except Exception as e:
             logger.error(f"Photo download failed: {e}")
         return None

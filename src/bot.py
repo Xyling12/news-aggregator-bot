@@ -1065,6 +1065,20 @@ async def process_new_post(post_id: int):
     text_lower = original_text.lower()
 
     # Step 0a: Ad filter — skip promotional posts
+    # Tier 1: hard stop — 1 word is enough for blatant ads
+    _HARD_AD_WORDS = [
+        "лицо бренда", "лицо kari", "лицо бренд", "амбассадор",
+        "спонсор", "партнёрский материал", "на правах рекламы",
+        "erid", "orid", "рекламодатель", "рекламный пост",
+        "поспешите приобрести", "успейте купить", "не упустите свой шанс",
+        "новинки коллекции", "коллаборации первого уровня",
+    ]
+    if any(w in text_lower for w in _HARD_AD_WORDS):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: hard ad keyword matched")
+        return
+
+    # Tier 2: soft stop — 2+ generic ad words
     ad_matches = [w for w in _config.ad_stop_words if w in text_lower]
     if len(ad_matches) >= 2:  # 2+ ad stop-words = spam
         await _db.update_post_status(post_id, "rejected")
