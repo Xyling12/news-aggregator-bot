@@ -170,6 +170,15 @@ class ContentScheduler:
             logger.warning(f"Content generation returned empty for {rubric} — Gemini may be rate-limited")
             raise RuntimeError(f"AI вернул пустой текст для '{label}'. Возможно, квота Gemini исчерпана — попробуй позже.")
 
+        # Guard: reject AI refusals before publishing ("Я не могу обсудить эту тему...")
+        try:
+            from src.ai_rewriter import AIRewriter as _AIR
+            if _AIR._is_refusal(text):
+                logger.warning(f"Skipping {rubric}: AI returned a refusal message")
+                raise RuntimeError(f"AI отказался генерировать '{label}' (safety filter). Пропускаем публикацию.")
+        except ImportError:
+            pass  # Safety: never block publication due to import errors
+
         # Publish with photo if available
         try:
             if photo_url:
