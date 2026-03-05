@@ -202,7 +202,7 @@ class AIRewriter:
 
         try:
             prompt = RELEVANCE_PROMPT.format(text=text[:500])
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self._gemini_model.generate_content(
@@ -264,7 +264,7 @@ class AIRewriter:
                 prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
 
                 # Run sync Gemini call in executor to avoid blocking
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 _model = model  # capture for lambda
                 _prompt = prompt
                 response = await loop.run_in_executor(
@@ -366,7 +366,8 @@ class AIRewriter:
                 ],
             }
 
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, json=body, headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -399,7 +400,8 @@ class AIRewriter:
     async def _rewrite_with_retext(self, text: str) -> Optional[str]:
         """Rewrite text using ReText.AI API (fallback)."""
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 # ReText.AI API endpoint
                 url = "https://retext.ai/api/v1/rewrite"
                 headers = {
@@ -456,7 +458,7 @@ class AIRewriter:
 
 Текст: {text[:400]}"""
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self._gemini_model.generate_content(
@@ -505,7 +507,7 @@ class AIRewriter:
 
 Текст: {text[:500]}"""
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: self._gemini_model.generate_content(prompt),

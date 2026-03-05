@@ -6,6 +6,7 @@ using Gemini AI and external APIs. Each post includes a stock photo.
 import asyncio
 import logging
 import random
+import re
 from datetime import datetime
 from typing import Optional, List, Tuple
 
@@ -318,7 +319,7 @@ class ContentGenerator:
             return None
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             _model = self._model
             _prompt = prompt
             response = await loop.run_in_executor(
@@ -335,7 +336,6 @@ class ContentGenerator:
 
             if response and response.text:
                 text = response.text.strip()
-                import re
                 text = re.sub(r'^#{1,3}\s*', '', text, flags=re.MULTILINE)
                 # Convert **bold** markdown to <b>bold</b> HTML
                 text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
@@ -357,7 +357,6 @@ class ContentGenerator:
             keywords_text = await self._ask_gemini(prompt, temperature=0.2)
             if keywords_text:
                 # Clean HTML tags that _ask_gemini may have added
-                import re
                 keywords_text = re.sub(r'<[^>]+>', '', keywords_text)
                 keywords = [kw.strip().lower() for kw in keywords_text.split(",")]
             else:
