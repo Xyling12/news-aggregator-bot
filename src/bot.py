@@ -1077,28 +1077,28 @@ async def _publish_post(post: dict) -> bool:
     await _db.add_published(post["id"], msg.message_id)
     logger.info(f"Published post #{post['id']} to {target}")
 
-    # ── Emoji reactions directly on the post ──────────────────────────────
-    # Bot seeds contextual emoji so they appear as clickable reaction buttons
+    # ── Emoji reaction directly on the post ───────────────────────────────
+    # Telegram bots can set only ONE reaction per message (non-premium limit).
     try:
         _t = (post.get("rewritten_text") or post["original_text"]).lower()
         if any(w in _t for w in ["погиб", "авария", "дтп", "пожар", "трагед", "жертв"]):
-            _emojis = ["😢", "🙏", "😱"]                          # tragedy → empathy
+            _emoji = "😢"                                          # tragedy → empathy
         elif any(w in _t for w in ["жкх", "тариф", "чиновник", "мэр", "депутат", "бюджет"]):
-            _emojis = ["😡", "🤷", "😂"]                          # bureaucracy → sarcasm
+            _emoji = "😡"                                          # bureaucracy → sarcasm
         elif any(w in _t for w in ["открыт", "новый", "запуст", "построен", "победил"]):
-            _emojis = ["🔥", "👍", "🎉"]                          # good news → positivity
+            _emoji = "🔥"                                          # good news → positivity
         elif any(w in _t for w in ["цен", "подорожал", "рост", "инфляц", "зарплат"]):
-            _emojis = ["😡", "🤷", "👍"]                          # prices → money pain
+            _emoji = "😡"                                          # prices → frustration
         else:
-            _emojis = ["😡", "🤷", "😂", "👍"]                   # universal default
+            _emoji = "👍"                                          # universal default
         await _bot.set_message_reaction(
             chat_id=target,
             message_id=msg.message_id,
-            reaction=[ReactionTypeEmoji(emoji=e) for e in _emojis],
+            reaction=[ReactionTypeEmoji(emoji=_emoji)],
         )
-        logger.info(f"Post #{post['id']}: reactions set {_emojis}")
+        logger.info(f"Post #{post['id']}: reaction set {_emoji}")
     except Exception as react_err:
-        logger.warning(f"Post #{post['id']}: reactions failed ({react_err})")
+        logger.warning(f"Post #{post['id']}: reaction failed ({react_err})")
 
     # ── Cross-post to VK ──────────────────────────────────────────────────
     if _vk_publisher and _vk_publisher.enabled:

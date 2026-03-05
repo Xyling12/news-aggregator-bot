@@ -331,39 +331,59 @@ class ContentGenerator:
             return None
         return await self._rewriter.ask_ai(prompt, temperature=temperature)
 
-    async def _find_photo(self, text: str) -> Optional[str]:
-        """Find a relevant stock photo URL for the given text."""
-        if not self._media or not self._media.unsplash_key:
+    async def _find_photo(self, text: str, hint_keywords: Optional[list] = None) -> Optional[str]:
+        """Find a relevant stock photo URL for the given text.
+
+        Args:
+            text: Post text (used to generate keywords via AI if hint_keywords not provided).
+            hint_keywords: Optional pre-defined keywords for this rubric — take priority over AI-generated ones.
+        """
+        if not self._media:
             return None
 
-        # Ask Gemini for photo keywords
-        try:
-            prompt = PHOTO_KEYWORDS_PROMPT.format(text=text[:300])
-            keywords_text = await self._ask_ai(prompt, temperature=0.2)
-            if keywords_text:
-                # Clean HTML tags that _ask_ai may have added
-                keywords_text = re.sub(r'<[^>]+>', '', keywords_text)
-                keywords = [kw.strip().lower() for kw in keywords_text.split(",")]
-            else:
-                keywords = ["udmurtia", "russia", "city"]
-        except Exception:
-            keywords = ["udmurtia", "russia", "nature"]
+        # Use hint keywords first; fall back to AI-generated keywords
+        if hint_keywords:
+            keywords = hint_keywords
+        else:
+            try:
+                prompt = PHOTO_KEYWORDS_PROMPT.format(text=text[:300])
+                keywords_text = await self._ask_ai(prompt, temperature=0.2)
+                if keywords_text:
+                    # Clean HTML tags that _ask_ai may have added
+                    keywords_text = re.sub(r'<[^>]+>', '', keywords_text)
+                    keywords = [kw.strip().lower() for kw in keywords_text.split(",")]
+                else:
+                    keywords = ["udmurtia", "russia", "city"]
+            except Exception:
+                keywords = ["udmurtia", "russia", "nature"]
 
-        # Search Unsplash
+        # Search Unsplash — pick a random photo from top-5 to add variety
         try:
-            photos = await self._media.search_stock_photo(keywords, count=3)
+            photos = await self._media.search_stock_photo(keywords, count=5)
             if photos:
-                return photos[0]["url"]
+                return random.choice(photos[:5])["url"]
         except Exception as e:
-            logger.error(f"Photo search failed: {e}")
+            logger.error(f"Photo search failed ({keywords}): {e}")
+
+        # Fallback: try broader keywords if specific ones returned nothing
+        if hint_keywords:
+            try:
+                fallback = [hint_keywords[0], "russia"]
+                photos = await self._media.search_stock_photo(fallback, count=5)
+                if photos:
+                    return random.choice(photos[:5])["url"]
+            except Exception:
+                pass
 
         return None
 
-    async def _generate_with_photo(self, text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    async def _generate_with_photo(
+        self, text: Optional[str], hint_keywords: Optional[list] = None
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Return (text, photo_url) tuple. Always tries to find a photo."""
         if not text:
             return None, None
-        photo_url = await self._find_photo(text)
+        photo_url = await self._find_photo(text, hint_keywords=hint_keywords)
         return text, photo_url
 
     # ── Rubric Methods ── each returns (text, photo_url) ─────────────────
@@ -439,7 +459,7 @@ class ContentGenerator:
         if text:
             text += "\n\n#история #удмуртия #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        return await self._generate_with_photo(text, hint_keywords=["history", "archive", "russia"])
 
     async def generate_five_facts(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate '5 facts about...' post."""
@@ -449,7 +469,29 @@ class ContentGenerator:
         if text:
             text += "\n\n#факты #ижевск #удмуртия"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        # Derive English search keywords from Russian topic
+        topic_en_map = {
+            "набережной": "embankment waterfront", "оружейном": "gun factory weapons",
+            "удмуртском языке": "language culture", "Калашникове": "kalashnikov gun",
+            "кухне": "food cooking", "зоопарк": "zoo animals",
+            "реке": "river nature", "архитектур": "architecture building",
+            "традиц": "tradition culture folk", "цирк": "circus entertainment",
+            "спорт": "sport athletics", "мотоцикл": "motorcycle",
+            "ледов": "ice winter", "культур": "culture art",
+            "музей": "museum exhibit", "мёд": "honey bees",
+            "улиц": "street city", "парк": "park green",
+            "образован": "education school", "транспорт": "transport bus",
+            "промышленност": "industry factory", "театр": "theater stage",
+            "природ": "nature forest", "знаменит": "portrait people",
+            "фестивал": "festival crowd", "Камбарк": "russia town",
+            "Воткинск": "russia city", "Сарапул": "russia river",
+        }
+        hint = ["facts", "russia"]
+        for key, val in topic_en_map.items():
+            if key.lower() in topic.lower():
+                hint = val.split() + ["russia"]
+                break
+        return await self._generate_with_photo(text, hint_keywords=hint)
 
     async def generate_recipe(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate a recipe post."""
@@ -459,7 +501,27 @@ class ContentGenerator:
         if text:
             text += "\n\n#рецепт #удмуртия #кухня"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        # Recipe photos: use food-specific keywords for better Unsplash results
+        recipe_photo_map = {
+            "перепеч": ["meat pie", "pastry baked"],
+            "табан": ["pancakes", "traditional food"],
+            "пельмен": ["dumplings", "homemade food"],
+            "шаньг": ["potato pastry", "baked goods"],
+            "шыд": ["soup broth", "homemade soup"],
+            "гриб": ["mushroom dish", "forest mushrooms"],
+            "кокрок": ["pastry baked", "homemade bread"],
+            "кисель": ["porridge oats", "traditional drink"],
+            "суп": ["vegetable soup", "rustic cooking"],
+            "хлеб": ["homemade bread", "bakery"],
+            "блин": ["pancakes berries", "traditional food"],
+            "пирог": ["berry pie", "fruit cake baked"],
+        }
+        hint = ["food cooking", "homemade"]
+        for key, val in recipe_photo_map.items():
+            if key.lower() in topic.lower():
+                hint = val
+                break
+        return await self._generate_with_photo(text, hint_keywords=hint)
 
     async def generate_lifehack(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate a lifehack post."""
@@ -469,7 +531,26 @@ class ContentGenerator:
         if text:
             text += "\n\n#полезно #ижевск #лайфхак"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        lifehack_photo_map = {
+            "ЖКХ": ["utility bills apartment", "apartment interior"],
+            "вещи": ["donate clothes", "thrift store items"],
+            "мероприятия": ["city event festival", "outdoor activities"],
+            "УК": ["apartment building housing", "city services"],
+            "спорт": ["outdoor sport exercise", "gym fitness"],
+            "транспорт": ["bus public transport", "city commute"],
+            "приложен": ["smartphone app", "mobile phone"],
+            "машину": ["car winter", "automobile maintenance"],
+            "грибы": ["forest mushrooms picking", "nature walk"],
+            "продукт": ["supermarket grocery", "food shopping"],
+            "яма": ["road repair", "street infrastructure"],
+            "льготы": ["documents paperwork", "social services"],
+        }
+        hint = ["city life tips", "urban living"]
+        for key, val in lifehack_photo_map.items():
+            if key.lower() in topic.lower():
+                hint = val
+                break
+        return await self._generate_with_photo(text, hint_keywords=hint)
 
     async def generate_place(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate a place of Udmurtia guide post."""
@@ -479,7 +560,39 @@ class ContentGenerator:
         if text:
             text += "\n\n#места #удмуртия"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        place_photo_map = {
+            "набережн": ["waterfront embankment", "river promenade"],
+            "монумент": ["monument statue", "memorial sculpture"],
+            "собор": ["orthodox church", "cathedral russia"],
+            "музей Калашникова": ["gun museum weapons", "military museum"],
+            "площадь": ["city square plaza", "urban square"],
+            "парк Кирова": ["city park trees", "park walking"],
+            "зоопарк": ["zoo animals", "wildlife park"],
+            "цирк": ["circus arena", "circus performance"],
+            "летний сад": ["summer garden park", "botanical garden"],
+            "музей": ["museum interior exhibit", "gallery art"],
+            "театр": ["theater stage", "historic theater"],
+            "Тол Бабай": ["winter fairy tale", "snow forest cottage"],
+            "Лудорвай": ["open air museum", "folk village ethnography"],
+            "Нечкинск": ["national park nature", "kama river"],
+            "Чайковского": ["historic house museum", "composer piano"],
+            "Сарапул": ["historic town river", "russia old town"],
+            "гора": ["hill landscape", "nature panorama"],
+            "пещера": ["cave spelunking", "rock cave"],
+            "Камбарск": ["small town russia", "local museum"],
+            "горы": ["hills forest nature", "landscape panorama"],
+            "озеро": ["lake nature", "tranquil lake water"],
+            "Троицкий": ["orthodox church", "cathedral architecture"],
+            "ботанический": ["botanical garden plants", "greenhouse garden"],
+            "рыбхоз": ["fish pond lake", "fishing rural"],
+            "Бураново": ["village countryside", "folk singing"],
+        }
+        hint = ["russia travel landmark", "russian landscape"]
+        for key, val in place_photo_map.items():
+            if key.lower() in topic.lower():
+                hint = val
+                break
+        return await self._generate_with_photo(text, hint_keywords=hint)
 
     async def generate_evening_fun(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate evening entertainment post."""
@@ -489,7 +602,13 @@ class ContentGenerator:
         if text:
             text += "\n\n#вечер #ижевск #развлечения"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        fun_keywords = random.choice([
+            ["happy people laughing", "friends fun"],
+            ["evening city lights", "night life"],
+            ["entertainment quiz game", "trivia fun"],
+            ["cozy evening home", "relax leisure"],
+        ])
+        return await self._generate_with_photo(text, hint_keywords=fun_keywords)
 
     async def generate_daily_digest(self, published_texts: List[str]) -> Tuple[Optional[str], Optional[str]]:
         """Generate daily digest from published news."""
@@ -521,4 +640,24 @@ class ContentGenerator:
         if text:
             text += "\n\n#праздник #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text)
+        holiday_photo_map = {
+            "Новый год": ["new year celebration", "fireworks snow"],
+            "Рождество": ["christmas decoration", "winter holiday"],
+            "женский день": ["flowers bouquet women", "spring flowers"],
+            "Победы": ["victory parade memorial", "war veterans"],
+            "защитника": ["military honor soldiers", "patriotic"],
+            "России": ["russia flag celebration", "patriotic holiday"],
+            "детей": ["children playing happy", "kids outdoor"],
+            "влюблённых": ["romantic couple love", "valentine hearts"],
+            "знаний": ["school books students", "education first day"],
+            "матери": ["mother child family", "mother daughter"],
+            "учителя": ["teacher classroom education", "school"],
+            "семьи": ["happy family", "family outdoors"],
+            "космонавтики": ["space stars cosmos", "rocket launch"],
+        }
+        hint = ["celebration holiday festive", "holiday decoration"]
+        for key_word, val in holiday_photo_map.items():
+            if key_word.lower() in holiday_name.lower():
+                hint = val
+                break
+        return await self._generate_with_photo(text, hint_keywords=hint)

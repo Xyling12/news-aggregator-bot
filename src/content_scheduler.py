@@ -197,31 +197,32 @@ class ContentScheduler:
                 )
                 logger.info(f"✅ Published {label} (no photo) to {target}")
 
-            # ── Emoji reactions directly on post (skip digest — it's already analytical) ──
+            # ── Emoji reaction directly on post (skip digest — it's already analytical) ──
+            # Telegram bots can set only ONE reaction per message (non-premium limit).
             if rubric != "daily_digest" and msg:
                 try:
                     _t = text.lower()
                     if any(w in _t for w in ["погиб", "авария", "дтп", "пожар", "трагед", "жертв"]):
-                        _emojis = ["😢", "🙏", "😱"]
+                        _emoji = "😢"
                     elif any(w in _t for w in ["жкх", "тариф", "чиновник", "мэр", "депутат"]):
-                        _emojis = ["😡", "🤷", "😂"]
+                        _emoji = "😡"
                     elif any(w in _t for w in ["открыт", "новый", "запуст", "построен"]):
-                        _emojis = ["🔥", "👍", "🎉"]
+                        _emoji = "🔥"
                     elif rubric in ("recipe", "place", "history_fact"):
-                        _emojis = ["🔥", "👍", "🤔"]
+                        _emoji = "🔥"
                     elif rubric == "weather":
-                        _emojis = ["😐", "🥱", "🔥"]
+                        _emoji = "😐"
                     else:
-                        _emojis = ["😡", "🤷", "😂", "👍"]
+                        _emoji = "👍"
                     from aiogram.types import ReactionTypeEmoji as _Rte
                     await self.bot.set_message_reaction(
                         chat_id=target,
                         message_id=msg.message_id,
-                        reaction=[_Rte(emoji=e) for e in _emojis],
+                        reaction=[_Rte(emoji=_emoji)],
                     )
-                    logger.info(f"✅ Reactions set for {label}: {_emojis}")
+                    logger.info(f"✅ Reaction set for {label}: {_emoji}")
                 except Exception as react_err:
-                    logger.warning(f"Reactions failed for {label}: {react_err}")
+                    logger.warning(f"Reaction failed for {label}: {react_err}")
 
             # VK crosspost
             try:
