@@ -1098,7 +1098,7 @@ async def _publish_post(post: dict) -> bool:
         )
         logger.info(f"Post #{post['id']}: reactions set {_emojis}")
     except Exception as react_err:
-        logger.debug(f"Post #{post['id']}: reactions skipped ({react_err})")
+        logger.warning(f"Post #{post['id']}: reactions failed ({react_err})")
 
     # ── Cross-post to VK ──────────────────────────────────────────────────
     if _vk_publisher and _vk_publisher.enabled:

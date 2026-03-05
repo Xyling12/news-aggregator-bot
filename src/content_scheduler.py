@@ -221,7 +221,7 @@ class ContentScheduler:
                     )
                     logger.info(f"✅ Reactions set for {label}: {_emojis}")
                 except Exception as react_err:
-                    logger.debug(f"Reactions skipped for {label}: {react_err}")
+                    logger.warning(f"Reactions failed for {label}: {react_err}")
 
             # VK crosspost
             try:
