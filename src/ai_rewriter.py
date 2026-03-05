@@ -253,6 +253,82 @@ class AIRewriter:
         logger.error("All AI rewrite engines failed")
         return None, "error"
 
+    async def ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
+        """Generic AI text generation with Gemini→YandexGPT fallback.
+
+        Used by ContentGenerator for rubric posts (weather, recipe, facts, etc.).
+        """
+        import re as _re
+
+        # Try Gemini first
+        if self._gemini_models:
+            try:
+                loop = asyncio.get_event_loop()
+                for model in self._gemini_models:
+                    try:
+                        response = await loop.run_in_executor(
+                            None,
+                            lambda m=model: m.generate_content(
+                                prompt,
+                                generation_config=genai.GenerationConfig(
+                                    temperature=temperature,
+                                    max_output_tokens=2048,
+                                ),
+                                safety_settings=SAFETY_SETTINGS if _HAS_SAFETY else None,
+                            ),
+                        )
+                        if response and response.text:
+                            text = response.text.strip()
+                            text = _re.sub(r'^#{1,3}\s*', '', text, flags=_re.MULTILINE)
+                            text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+                            logger.info(f"ask_ai: Gemini OK ({len(text)} chars)")
+                            return text
+                    except Exception as gem_err:
+                        err_str = str(gem_err).lower()
+                        if "quota" in err_str or "limit" in err_str or "429" in err_str:
+                            logger.warning(f"ask_ai: Gemini quota hit, trying YandexGPT")
+                            break
+                        logger.warning(f"ask_ai: Gemini model error: {gem_err}")
+            except Exception as e:
+                logger.warning(f"ask_ai: Gemini failed: {e}")
+
+        # Fallback to YandexGPT
+        if self.config.yandex_api_key and self.config.yandex_folder_id:
+            try:
+                import aiohttp as _aiohttp
+                url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+                headers = {
+                    "Authorization": f"Api-Key {self.config.yandex_api_key}",
+                    "Content-Type": "application/json",
+                }
+                model_uri = f"gpt://{self.config.yandex_folder_id}/yandexgpt-lite/latest"
+                body = {
+                    "modelUri": model_uri,
+                    "completionOptions": {"stream": False, "temperature": temperature, "maxTokens": "2048"},
+                    "messages": [
+                        {"role": "system", "text": "Ты — автор Telegram-канала «Ижевск Сегодня». Пиши живо, по-человечески."},
+                        {"role": "user", "text": prompt},
+                    ],
+                }
+                timeout = _aiohttp.ClientTimeout(total=30)
+                async with _aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=body, headers=headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            alternatives = data.get("result", {}).get("alternatives", [])
+                            if alternatives:
+                                text = alternatives[0].get("message", {}).get("text", "").strip()
+                                if text and len(text) > 30:
+                                    logger.info(f"ask_ai: YandexGPT fallback OK ({len(text)} chars)")
+                                    return text
+                        else:
+                            logger.error(f"ask_ai: YandexGPT returned {resp.status}")
+            except Exception as e:
+                logger.error(f"ask_ai: YandexGPT failed: {e}")
+
+        logger.error("ask_ai: all engines failed")
+        return None
+
     async def _rewrite_with_gemini(self, text: str) -> Optional[str]:
         """Rewrite text using Google Gemini with model fallback on quota errors."""
         if not self._gemini_models:

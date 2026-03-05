@@ -307,9 +307,9 @@ HOLIDAY_PROMPT = """Напиши поздравительный пост для 
 class ContentGenerator:
     """Generates unique daily content for the channel with stock photos."""
 
-    def __init__(self, config: Config, gemini_model=None, media_processor=None):
+    def __init__(self, config: Config, rewriter=None, media_processor=None):
         self.config = config
-        self._model = gemini_model
+        self._rewriter = rewriter  # AIRewriter — used for ask_ai (Gemini→YandexGPT fallback)
         self._media = media_processor
         self._used_topics: dict[str, list] = {}  # Track used topics per rubric
 
@@ -324,39 +324,12 @@ class ContentGenerator:
         self._used_topics.setdefault(rubric, []).append(topic)
         return topic
 
-    async def _ask_gemini(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
-        """Send prompt to Gemini and return response text."""
-        if not self._model:
-            logger.error("No Gemini model available for content generation")
+    async def _ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
+        """Send prompt to AI with Gemini→YandexGPT fallback."""
+        if not self._rewriter:
+            logger.error("No AI rewriter available for content generation")
             return None
-
-        try:
-            loop = asyncio.get_event_loop()
-            _model = self._model
-            _prompt = prompt
-            response = await loop.run_in_executor(
-                None,
-                lambda: _model.generate_content(
-                    _prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=temperature,
-                        max_output_tokens=2048,
-                    ),
-                    safety_settings=SAFETY_SETTINGS,
-                ),
-            )
-
-            if response and response.text:
-                text = response.text.strip()
-                text = re.sub(r'^#{1,3}\s*', '', text, flags=re.MULTILINE)
-                # Convert **bold** markdown to <b>bold</b> HTML
-                text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-                return text
-
-        except Exception as e:
-            logger.error(f"Gemini content generation failed: {e}")
-
-        return None
+        return await self._rewriter.ask_ai(prompt, temperature=temperature)
 
     async def _find_photo(self, text: str) -> Optional[str]:
         """Find a relevant stock photo URL for the given text."""
@@ -366,9 +339,9 @@ class ContentGenerator:
         # Ask Gemini for photo keywords
         try:
             prompt = PHOTO_KEYWORDS_PROMPT.format(text=text[:300])
-            keywords_text = await self._ask_gemini(prompt, temperature=0.2)
+            keywords_text = await self._ask_ai(prompt, temperature=0.2)
             if keywords_text:
-                # Clean HTML tags that _ask_gemini may have added
+                # Clean HTML tags that _ask_ai may have added
                 keywords_text = re.sub(r'<[^>]+>', '', keywords_text)
                 keywords = [kw.strip().lower() for kw in keywords_text.split(",")]
             else:
@@ -429,7 +402,7 @@ class ContentGenerator:
                 temp=temp, feels_like=feels_like, description=description,
                 wind=wind, humidity=humidity, pressure=pressure, date=date_str,
             )
-            text = await self._ask_gemini(prompt, temperature=0.5)
+            text = await self._ask_ai(prompt, temperature=0.5)
             if text:
                 text += "\n\n#погода #ижевск"
                 text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -451,7 +424,7 @@ class ContentGenerator:
             "Эмодзи + 'Ижевск, дата' + 3-4 строки + совет что надеть. "
             "Пиши как человек, не как бот.\n" + HUMAN_STYLE
         )
-        text = await self._ask_gemini(prompt, temperature=0.6)
+        text = await self._ask_ai(prompt, temperature=0.6)
         if text:
             text += "\n\n#погода #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -462,7 +435,7 @@ class ContentGenerator:
         now = datetime.now()
         date_str = f"{now.day} {now.strftime('%B')}"
         prompt = HISTORY_PROMPT.format(date=date_str)
-        text = await self._ask_gemini(prompt)
+        text = await self._ask_ai(prompt)
         if text:
             text += "\n\n#история #удмуртия #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -472,7 +445,7 @@ class ContentGenerator:
         """Generate '5 facts about...' post."""
         topic = self._pick_topic("facts", FIVE_FACTS_TOPICS)
         prompt = FIVE_FACTS_PROMPT.format(topic=topic)
-        text = await self._ask_gemini(prompt)
+        text = await self._ask_ai(prompt)
         if text:
             text += "\n\n#факты #ижевск #удмуртия"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -482,7 +455,7 @@ class ContentGenerator:
         """Generate a recipe post."""
         topic = self._pick_topic("recipe", RECIPE_TOPICS)
         prompt = RECIPE_PROMPT.format(topic=topic)
-        text = await self._ask_gemini(prompt)
+        text = await self._ask_ai(prompt)
         if text:
             text += "\n\n#рецепт #удмуртия #кухня"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -492,7 +465,7 @@ class ContentGenerator:
         """Generate a lifehack post."""
         topic = self._pick_topic("lifehack", LIFEHACK_TOPICS)
         prompt = LIFEHACK_PROMPT.format(topic=topic)
-        text = await self._ask_gemini(prompt)
+        text = await self._ask_ai(prompt)
         if text:
             text += "\n\n#полезно #ижевск #лайфхак"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -502,7 +475,7 @@ class ContentGenerator:
         """Generate a place of Udmurtia guide post."""
         topic = self._pick_topic("places", UDMURTIA_PLACES)
         prompt = PLACE_PROMPT.format(topic=topic)
-        text = await self._ask_gemini(prompt)
+        text = await self._ask_ai(prompt)
         if text:
             text += "\n\n#места #удмуртия"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -512,7 +485,7 @@ class ContentGenerator:
         """Generate evening entertainment post."""
         content_type = random.choice(EVENING_FUN_TYPES)
         prompt = EVENING_FUN_PROMPT.format(content_type=content_type)
-        text = await self._ask_gemini(prompt, temperature=0.9)
+        text = await self._ask_ai(prompt, temperature=0.9)
         if text:
             text += "\n\n#вечер #ижевск #развлечения"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -527,7 +500,7 @@ class ContentGenerator:
         date_str = now.strftime("%d.%m.%Y")
         news_list = "\n\n---\n\n".join([t[:200] for t in published_texts[:10]])
         prompt = DIGEST_PROMPT.format(news_list=news_list, date=date_str)
-        text = await self._ask_gemini(prompt, temperature=0.3)
+        text = await self._ask_ai(prompt, temperature=0.3)
         if text:
             text += "\n\n#итогидня #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
@@ -544,7 +517,7 @@ class ContentGenerator:
 
         date_str = now.strftime("%d.%m.%Y")
         prompt = HOLIDAY_PROMPT.format(holiday_name=holiday_name, date=date_str)
-        text = await self._ask_gemini(prompt)
+        text = await self._ask_ai(prompt)
         if text:
             text += "\n\n#праздник #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"

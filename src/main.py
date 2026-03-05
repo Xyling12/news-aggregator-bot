@@ -81,7 +81,7 @@ async def main():
     # Create content generator & scheduler
     content_gen = ContentGenerator(
         config=config,
-        gemini_model=rewriter._gemini_model,
+        rewriter=rewriter,
         media_processor=media_proc,
     )
     content_scheduler = ContentScheduler(
