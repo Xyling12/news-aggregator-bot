@@ -176,7 +176,7 @@ class MediaProcessor:
                     "action": "query",
                     "titles": batch,
                     "prop": "imageinfo",
-                    "iiprop": "url|mime|extmetadata",
+                    "iiprop": "url|mime|extmetadata|size",
                     "iiurlwidth": "1200",   # request a 1200px-wide scaled version
                     "format": "json",
                 }
@@ -208,6 +208,13 @@ class MediaProcessor:
                     full_url = info.get("url", "")
                     thumb_url = info.get("thumburl", full_url)
                     if not full_url:
+                        continue
+
+                    # Skip low-resolution images (thumbnails, old scans, screenshots)
+                    width = info.get("width", 0)
+                    height = info.get("height", 0)
+                    if width < 600 or height < 400:
+                        logger.debug(f"Wikimedia: skipping small image {width}x{height}")
                         continue
 
                     # Extract author and description from extmetadata
