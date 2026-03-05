@@ -488,20 +488,30 @@ class AIRewriter:
         try:
             prompt = f"""Ты помогаешь найти подходящее стоковое фото для новости.
 
-Задача: придумай 3-4 ключевых слова НА АНГЛИЙСКОМ для поиска фото на Unsplash.
+Задача: придумай 2-3 ключевых слова НА АНГЛИЙСКОМ для поиска фото на Pixabay.
+
+ГЛАВНОЕ ПРАВИЛО: ключевые слова должны описывать СЦЕНУ С ЛЮДЬМИ или МЕСТО — то, что фотогенично и легко найти на стоке.
+
+ЗАПРЕЩЕНО использовать:
+- Названия звуков или абстрактных понятий: bell, ring, sound, noise, alarm, signal
+- Абстракции: news, information, article, report, technology, digital, modern
+- Технические объекты, которые плохо смотрятся: pipe, tube, wire, equipment (если не это главная суть)
+- Слова, которые дадут технические фото вместо репортажных
 
 ПРАВИЛА:
-- Слова должны описывать ВИЗУАЛЬНЫЙ ПРЕДМЕТ новости (что показать на фото)
-- НЕ используй абстрактные слова (news, information, article)
-- Используй конкретные, фотогеничные понятия
-- Первое слово — ГЛАВНЫЙ объект новости
+- Описывай ЛЮДЕЙ в СИТУАЦИИ, а не объект (teacher NOT bell, students NOT ring)
+- Используй конкретные сцены: "smiling schoolchildren", "classroom russia", не просто "school"
+- 2-3 слова через запятую
 
 Примеры:
-- Новость про строительство спорткомплекса → "sports complex, construction, building, gym"  
-- Новость про пожар в доме → "fire, apartment building, firefighters, flames"
-- Новость про зарплаты учителей → "teacher, classroom, school, education"
-- Новость про ремонт дороги → "road construction, asphalt, highway, roadwork"
-- Новость про QR-коды → "QR code, mobile payment, smartphone, digital"
+- Новость про звонки в школах с песнями → "schoolchildren classroom, students happy school"
+- Новость про строительство спорткомплекса → "sports complex construction, gym building workers"
+- Новость про пожар в доме → "firefighters apartment fire, rescue workers"
+- Новость про зарплаты учителей → "teacher classroom, school education russia"
+- Новость про ремонт дороги → "road construction workers, highway asphalt"
+- Новость про застройщиков мошенников → "fraud court justice, police handcuffs"
+- Новость про погоду → "winter city street, people snow city"
+- Новость про больницу/медицину → "doctor hospital patient, medical workers"
 
 Ответь ТОЛЬКО словами через запятую, без объяснений.
 
@@ -515,10 +525,15 @@ class AIRewriter:
 
             if response and response.text:
                 keywords = [kw.strip().lower() for kw in response.text.strip().split(",")]
-                # Filter out generic/useless keywords
-                bad_keywords = {"news", "information", "article", "report", "update", "story", "newspaper"}
+                # Filter out generic/useless/dangerous keywords
+                bad_keywords = {
+                    "news", "information", "article", "report", "update", "story", "newspaper",
+                    "bell", "ring", "sound", "alarm", "signal", "noise", "tone", "ringtone",
+                    "pipe", "tube", "wire", "equipment", "technology", "digital", "modern",
+                    "abstract", "concept", "symbol", "icon", "background",
+                }
                 keywords = [kw for kw in keywords if kw and kw not in bad_keywords]
-                return keywords[:5]
+                return keywords[:3]
 
         except Exception as e:
             logger.error(f"Keyword extraction failed: {e}")
