@@ -124,13 +124,13 @@ def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
 #: which content category best fits a given post.  Order matters — more
 #: specific rubrics should come before broader ones.
 RUBRIC_MAP = [
-    ("⚡ СРОЧНО",       "#срочно",       ["срочно", "молния", "только что"]),
-    ("🔴 ПРОИСШЕСТВИЯ", "#происшествия", [
+    ("⚡ Срочно",        "#срочно",       ["срочно", "молния", "только что"]),
+    ("🔴 Происшествия", "#происшествия", [
         "пожар", "огонь", "горит", "авария", "дтп", "столкновение",
         "взрыв", "чп", "погиб", "гибель", "задержан",
         "арестован", "ограбление", "кража", "преступление",
     ]),
-    ("🚗 ТРАНСПОРТ",    "#транспорт",    [
+    ("🚗 Транспорт",    "#транспорт",    [
         "дорог", "маршрут", "автобус", "трамвай",
         "пробки", "светофор", "остановк",
     ]),
@@ -139,19 +139,19 @@ RUBRIC_MAP = [
         "электричество", "канализаци", "управляющая компани",
         "горячая вода", "отключен",
     ]),
-    ("💰 ЭКОНОМИКА",    "#экономика",    [
+    ("💰 Экономика",    "#экономика",    [
         "цены", "инфляци", "зарплат", "налог", "бизнес",
         "банк", "кредит", "ипотек", "рубл", "тариф",
     ]),
-    ("🏛 ВЛАСТЬ",       "#власть",       [
+    ("🏛 Власть",       "#власть",       [
         "глава", "мэр", "губернатор", "бречалов", "дума",
         "закон", "постановлени", "администраци", "правительств",
     ]),
-    ("🌡 ПОГОДА",       "#погода",       [
+    ("🌡 Погода",       "#погода",       [
         "погода", "мороз", "снег", "дождь", "гроза",
         "метель", "оттепель", "похолодани", "потеплени",
     ]),
-    ("⚽ СПОРТ",        "#спорт",        [
+    ("⚽ Спорт",        "#спорт",        [
         "матч", "чемпионат", "гол", "турнир",
         "соревновани", "стадион", "спортсмен", "спорткомп",
     ]),
@@ -203,13 +203,13 @@ def format_post(text: str, hashtags: list) -> str:
     rubric_label, rubric_hashtag = detect_rubric(text)
     parts = []
 
-    # Rubric at top
+    # Rubric badge at top — stylish pill format
     if rubric_label:
-        parts.append(f"<b>{rubric_label}</b>")
+        parts.append(f"<b>{rubric_label}</b>  <i>Ижевск Сегодня</i>")
         parts.append("")
 
     # Title (first line from AI output)
-    parts.append(lines[0].strip())
+    parts.append(f"<b>{lines[0].strip()}</b>")
     parts.append("")
 
     # Body
@@ -218,9 +218,9 @@ def format_post(text: str, hashtags: list) -> str:
         parts.append(body)
         parts.append("")
 
-    # Hashtags: AI-generated + rubric tag + city tags
-    all_tags = list(hashtags) if hashtags else []
-    if rubric_hashtag and rubric_hashtag not in all_tags:
+    # Hashtags: only rubric tag + fixed city tags (no noisy AI tags)
+    all_tags = []
+    if rubric_hashtag:
         all_tags.append(rubric_hashtag)
     for city_tag in ["#Ижевск", "#Удмуртия", "#ИжевскСегодня"]:
         if city_tag not in all_tags:
