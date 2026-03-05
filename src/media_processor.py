@@ -100,12 +100,12 @@ class MediaProcessor:
         """Search for stock photos.
 
         Priority:
-          1. Wikimedia Commons — free, no key, accessible from Russia
-          2. Pixabay — free API (PIXABAY_API_KEY), Russian support, accessible from Russia
+          1. Pixabay — free API (PIXABAY_API_KEY), photojournalism-style photos, no technical diagrams
+          2. Wikimedia Commons — free, no key, fallback for when Pixabay has no results
         """
-        results = await self._search_wikimedia(keywords, count)
+        results = await self._search_pixabay(keywords, count)
         if not results:
-            results = await self._search_pixabay(keywords, count)
+            results = await self._search_wikimedia(keywords, count)
         return results
 
     async def _search_wikimedia(self, keywords: List[str], count: int) -> List[dict]:
