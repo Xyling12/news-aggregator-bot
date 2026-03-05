@@ -198,21 +198,31 @@ class ContentScheduler:
                 )
                 logger.info(f"✅ Published {label} (no photo) to {target}")
 
-            # ── Native Telegram poll (for all rubrics except digest) ──────
-            if rubric != "daily_digest" and self.rewriter:
+            # ── Emoji reactions directly on post (skip digest — it's already analytical) ──
+            if rubric != "daily_digest" and msg:
                 try:
-                    poll_text = text
-                    poll_data = await self.rewriter.generate_poll_options(poll_text)
-                    if poll_data and poll_data.get("options"):
-                        await self.bot.send_poll(
-                            chat_id=target,
-                            question=poll_data["question"],
-                            options=poll_data["options"],
-                            is_anonymous=True,
-                        )
-                        logger.info(f"✅ Poll sent for {label}: '{poll_data['question']}'")
-                except Exception as poll_err:
-                    logger.warning(f"Poll send failed for {label}: {poll_err}")
+                    _t = text.lower()
+                    if any(w in _t for w in ["погиб", "авария", "дтп", "пожар", "трагед", "жертв"]):
+                        _emojis = ["😢", "🙏", "😱"]
+                    elif any(w in _t for w in ["жкх", "тариф", "чиновник", "мэр", "депутат"]):
+                        _emojis = ["😡", "🤷", "😂"]
+                    elif any(w in _t for w in ["открыт", "новый", "запуст", "построен"]):
+                        _emojis = ["🔥", "👍", "🎉"]
+                    elif rubric in ("recipe", "place", "history_fact"):
+                        _emojis = ["🔥", "👍", "🤔"]
+                    elif rubric == "weather":
+                        _emojis = ["😐", "🥱", "🔥"]
+                    else:
+                        _emojis = ["😡", "🤷", "😂", "👍"]
+                    from aiogram.types import ReactionTypeEmoji as _Rte
+                    await self.bot.set_message_reaction(
+                        chat_id=target,
+                        message_id=msg.message_id,
+                        reaction=[_Rte(emoji=e) for e in _emojis],
+                    )
+                    logger.info(f"✅ Reactions set for {label}: {_emojis}")
+                except Exception as react_err:
+                    logger.debug(f"Reactions skipped for {label}: {react_err}")
 
             # VK crosspost
             try:

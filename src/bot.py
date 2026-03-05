@@ -21,6 +21,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     FSInputFile,
+    ReactionTypeEmoji,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -1032,20 +1033,28 @@ async def _publish_post(post: dict) -> bool:
     await _db.add_published(post["id"], msg.message_id)
     logger.info(f"Published post #{post['id']} to {target}")
 
-    # ── Send native Telegram poll ─────────────────────────────────────────
+    # ── Emoji reactions directly on the post ──────────────────────────────
+    # Bot seeds contextual emoji so they appear as clickable reaction buttons
     try:
-        plain_text = post.get("rewritten_text") or post["original_text"]
-        poll_data = await _rewriter.generate_poll_options(plain_text)
-        if poll_data and poll_data.get("options"):
-            await _bot.send_poll(
-                chat_id=target,
-                question=poll_data["question"],
-                options=poll_data["options"],
-                is_anonymous=True,
-            )
-            logger.info(f"Post #{post['id']}: poll sent — '{poll_data['question']}'")
-    except Exception as poll_err:
-        logger.warning(f"Post #{post['id']}: poll send failed ({poll_err}) — skipping")
+        _t = (post.get("rewritten_text") or post["original_text"]).lower()
+        if any(w in _t for w in ["погиб", "авария", "дтп", "пожар", "трагед", "жертв"]):
+            _emojis = ["😢", "🙏", "😱"]                          # tragedy → empathy
+        elif any(w in _t for w in ["жкх", "тариф", "чиновник", "мэр", "депутат", "бюджет"]):
+            _emojis = ["😡", "🤷", "😂"]                          # bureaucracy → sarcasm
+        elif any(w in _t for w in ["открыт", "новый", "запуст", "построен", "победил"]):
+            _emojis = ["🔥", "👍", "🎉"]                          # good news → positivity
+        elif any(w in _t for w in ["цен", "подорожал", "рост", "инфляц", "зарплат"]):
+            _emojis = ["😡", "🤷", "👍"]                          # prices → money pain
+        else:
+            _emojis = ["😡", "🤷", "😂", "👍"]                   # universal default
+        await _bot.set_message_reaction(
+            chat_id=target,
+            message_id=msg.message_id,
+            reaction=[ReactionTypeEmoji(emoji=e) for e in _emojis],
+        )
+        logger.info(f"Post #{post['id']}: reactions set {_emojis}")
+    except Exception as react_err:
+        logger.debug(f"Post #{post['id']}: reactions skipped ({react_err})")
 
     # ── Cross-post to VK ──────────────────────────────────────────────────
     if _vk_publisher and _vk_publisher.enabled:
