@@ -264,7 +264,7 @@ class AIRewriter:
         if self._gemini_models:
             try:
                 loop = asyncio.get_event_loop()
-                for model in self._gemini_models:
+                for _name, model in self._gemini_models:
                     try:
                         response = await loop.run_in_executor(
                             None,
@@ -281,14 +281,14 @@ class AIRewriter:
                             text = response.text.strip()
                             text = _re.sub(r'^#{1,3}\s*', '', text, flags=_re.MULTILINE)
                             text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-                            logger.info(f"ask_ai: Gemini OK ({len(text)} chars)")
+                            logger.info(f"ask_ai: Gemini/{_name} OK ({len(text)} chars)")
                             return text
                     except Exception as gem_err:
                         err_str = str(gem_err).lower()
                         if "quota" in err_str or "limit" in err_str or "429" in err_str:
-                            logger.warning(f"ask_ai: Gemini quota hit, trying YandexGPT")
-                            break
-                        logger.warning(f"ask_ai: Gemini model error: {gem_err}")
+                            logger.warning(f"ask_ai: {_name} quota hit, trying next")
+                            continue
+                        logger.warning(f"ask_ai: {_name} error: {gem_err}")
             except Exception as e:
                 logger.warning(f"ask_ai: Gemini failed: {e}")
 
