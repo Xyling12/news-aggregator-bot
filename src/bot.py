@@ -980,9 +980,14 @@ async def _publish_post(post: dict) -> bool:
     # ── Try to publish with photo ─────────────────────────────────────────
     try:
         if replacement_url:
+            # Download locally first — Wikimedia/CDN URLs often block Telegram's fetcher
+            local_stock = await _media_processor.download_stock_photo(
+                replacement_url, f"stock_{post['id']}.jpg"
+            )
+            photo_source = FSInputFile(local_stock) if local_stock else replacement_url
             msg = await _bot.send_photo(
                 target,
-                photo=replacement_url,
+                photo=photo_source,
                 caption=text[:1024],
                 parse_mode=ParseMode.HTML,
             )
@@ -1074,6 +1079,21 @@ async def process_new_post(post_id: int):
     is_local = any(kw in source for kw in local_keywords)
 
     if not is_local:
+        # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
+        _GEO_KEYWORDS = [
+            "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
+            "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
+        ]
+        has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
+        if not has_geo:
+            await _db.update_post_status(post_id, "rejected")
+            logger.info(
+                f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
+                f"in non-local channel @{source}"
+            )
+            return
+
+        # Secondary AI check for nuanced relevance (only if geo check passed)
         is_relevant = await _rewriter.check_relevance(original_text)
         if not is_relevant:
             await _db.update_post_status(post_id, "rejected")
