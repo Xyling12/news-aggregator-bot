@@ -513,6 +513,50 @@ async def cmd_test_vk(message: Message):
         await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+@router.message(Command("testcontent"))
+async def cmd_test_content(message: Message):
+    """Manually trigger any content rubric right now — admin only."""
+    if not is_admin(message.from_user.id):
+        return
+
+    args = message.text.split(maxsplit=1)
+    rubric = args[1].strip().lower() if len(args) > 1 else ""
+
+    valid = {
+        "weather": "🌤 Погода",
+        "history_fact": "📅 История дня",
+        "five_facts": "📌 5 фактов",
+        "recipe": "🍽 Рецепт",
+        "lifehack": "💡 Лайфхак",
+        "place": "📍 Место",
+        "evening_fun": "😄 Вечерний fun",
+        "daily_digest": "📊 Дайджест",
+    }
+
+    if rubric not in valid:
+        lines = ["<b>📋 Доступные рубрики:</b>"]
+        for key, name in valid.items():
+            lines.append(f"  <code>/testcontent {key}</code> — {name}")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+
+    await message.answer(f"⏳ Генерирую <b>{valid[rubric]}</b>...", parse_mode=ParseMode.HTML)
+    sched = _content_scheduler
+    if not sched:
+        await message.answer("❌ Content scheduler не инициализирован (бот рестартует?)")
+        return
+
+    try:
+        await sched._publish_rubric(rubric, valid[rubric])
+        await message.answer(f"✅ <b>{valid[rubric]}</b> опубликовано в канал!", parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: <code>{e}</code>", parse_mode=ParseMode.HTML)
+
+
+# ── Reference to content scheduler (set from main.py) ─────────────────────
+_content_scheduler = None
+
+
 @router.message(Command("publish"))
 async def cmd_publish(message: Message):
     """Publish all approved posts with delays between them."""
