@@ -101,8 +101,12 @@ def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
     """Return True if *text* is too similar to any text in *candidates*.
 
     Two-tier check:
-      1. Cosine-like uniqueness via AIRewriter.calculate_uniqueness (>0.65 similarity).
-      2. Word-overlap ratio (>0.70).
+      1. Cosine-like uniqueness via AIRewriter.calculate_uniqueness (>0.82 similarity).
+      2. Word-overlap ratio (>0.85).
+
+    Thresholds are intentionally high because regional news always contains
+    shared geo-words (Ижевск, Удмуртия, жители) that inflate apparent similarity.
+    Only near-identical texts should be blocked as duplicates.
 
     The *rewriter* argument is the AIRewriter instance (passed in to avoid
     a circular import between utils ↔ ai_rewriter).
@@ -111,9 +115,9 @@ def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
         if not existing or existing == text:
             continue
         similarity = 1.0 - rewriter.calculate_uniqueness(text, existing)
-        if similarity > 0.65:
+        if similarity > 0.82:
             return True
-        if word_overlap(text, existing) > 0.70:
+        if word_overlap(text, existing) > 0.85:
             return True
     return False
 

@@ -319,7 +319,7 @@ class ContentGenerator:
             return None
 
         try:
-            loop = asyncio.get_running_loop()
+            loop = asyncio.get_event_loop()
             _model = self._model
             _prompt = prompt
             response = await loop.run_in_executor(
