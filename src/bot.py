@@ -1127,8 +1127,8 @@ async def process_new_post(post_id: int):
             return
 
     # Step 0c: Deduplication — smart two-tier check
-    # Tier 1: Compare against PUBLISHED posts (last 48h) — don't repeat what's already on the channel
-    published_texts = await _db.get_texts_by_status(["published"], hours=48)
+    # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
+    published_texts = await _db.get_texts_by_status(["published"], hours=12)
     if _is_similar_to_any(original_text, published_texts):
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: similar to published post")
@@ -1169,7 +1169,7 @@ async def process_new_post(post_id: int):
 
     # Step 2: Deduplicate by REWRITTEN text BEFORE formatting
     # (must be done before format_post adds the same footer/hashtags to every post)
-    published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=48)
+    published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=12)
     if _is_similar_to_any(rewritten, published_rewritten):
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
