@@ -1049,6 +1049,18 @@ async def _publish_post(post: dict) -> bool:
     elif _vk_publisher and not _vk_publisher.enabled:
         logger.debug("VK crosspost skipped: token or group_id not configured")
 
+    # ── Cross-post to MAX ─────────────────────────────────────────────────
+    if _max_publisher and _max_publisher.enabled:
+        try:
+            photo_for_max = post.get("replacement_media_url")
+            max_post_id = await _max_publisher.publish(text, photo_url=photo_for_max)
+            if max_post_id:
+                logger.info(f"Post #{post['id']} cross-posted to MAX (mid={max_post_id})")
+            else:
+                logger.warning(f"Post #{post['id']} MAX crosspost failed")
+        except Exception as e:
+            logger.error(f"MAX crosspost error for post #{post['id']}: {e}", exc_info=True)
+
     return True
 
 
