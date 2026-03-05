@@ -1032,6 +1032,21 @@ async def _publish_post(post: dict) -> bool:
     await _db.add_published(post["id"], msg.message_id)
     logger.info(f"Published post #{post['id']} to {target}")
 
+    # ── Send native Telegram poll ─────────────────────────────────────────
+    try:
+        plain_text = post.get("rewritten_text") or post["original_text"]
+        poll_data = await _rewriter.generate_poll_options(plain_text)
+        if poll_data and poll_data.get("options"):
+            await _bot.send_poll(
+                chat_id=target,
+                question=poll_data["question"],
+                options=poll_data["options"],
+                is_anonymous=True,
+            )
+            logger.info(f"Post #{post['id']}: poll sent — '{poll_data['question']}'")
+    except Exception as poll_err:
+        logger.warning(f"Post #{post['id']}: poll send failed ({poll_err}) — skipping")
+
     # ── Cross-post to VK ──────────────────────────────────────────────────
     if _vk_publisher and _vk_publisher.enabled:
         try:

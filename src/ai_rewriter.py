@@ -479,6 +479,106 @@ class AIRewriter:
 
         return []
 
+    async def generate_poll_options(self, text: str) -> dict:
+        """Generate a native Telegram poll question + emoji options for a news post.
+
+        Returns a dict with:
+            question (str): short poll question (max 300 chars)
+            options (list[str]): 3-4 emoji answer options (max 100 chars each)
+
+        Falls back to topic-based presets if Gemini is unavailable.
+        """
+        # ── Fallback presets by topic ─────────────────────────────────────
+        def _fallback(text_lower: str) -> dict:
+            if any(w in text_lower for w in ["жкх", "коммунал", "отоплен", "тариф", "ремонт"]):
+                return {"question": "Как вы к этому относитесь?",
+                        "options": ["😡 Позор", "🤷 Привыкли", "😂 Ожидаемо", "👍 Нормально"]}
+            if any(w in text_lower for w in ["чиновник", "мэр", "власт", "депутат", "администрац"]):
+                return {"question": "Ваша реакция?",
+                        "options": ["🤦 Без комментариев", "😡 Возмутительно", "😐 Как всегда", "👏 Молодцы"]}
+            if any(w in text_lower for w in ["дтп", "авария", "пожар", "происшеств", "погиб"]):
+                return {"question": "Как вы?",
+                        "options": ["😢 Сочувствую", "😱 Шок", "🙏 Надеюсь все живы"]}
+            if any(w in text_lower for w in ["строительств", "открыт", "новый", "запуст"]):
+                return {"question": "Как вам новость?",
+                        "options": ["🔥 Отлично!", "🤔 Посмотрим", "😐 Всё равно", "👎 Не верю"]}
+            if any(w in text_lower for w in ["цен", "рост", "подорожал", "инфляц", "зарплат"]):
+                return {"question": "Как ощущаете на кармане?",
+                        "options": ["💸 Уже больно", "😬 Скоро почувствую", "🤷 Пока норм", "🫡 Держимся"]}
+            # Default
+            return {"question": "Что думаете?",
+                    "options": ["🔥 Важно!", "😐 Норм", "🥱 Неинтересно", "😱 Вот это да"]}
+
+        text_lower = text.lower()
+
+        if not self._gemini_model:
+            return _fallback(text_lower)
+
+        try:
+            prompt = f"""Ты создаёшь интерактивный опрос для Telegram-канала под новость.
+
+ЗАДАЧА: придумай короткий вопрос и 3-4 варианта ответа с эмодзи — так, чтобы читатель не думал долго и сразу нажал.
+
+ПРАВИЛА:
+- Вопрос: max 60 символов, разговорный тон
+- Варианты: каждый начинается с ОДНОГО эмодзи, потом 2-4 слова, max 30 символов
+- Варианты должны охватывать разные эмоции/позиции
+- НЕ используй нейтральные корпоративные формулировки
+- Учитывай тему: для ЖКХ/чиновников — с иронией, для трагедий — сочувственно, для событий — позитивно
+
+ТЕМЫ-ПОДСКАЗКИ:
+- ЖКХ/чиновники → ирония, желчь
+- ДТП/пожар/трагедия → эмпатия, без юмора
+- Стройка/открытие → оптимизм vs скептицизм
+- Цены/тарифы → боль, юмор про кошелёк
+
+ФОРМАТ ОТВЕТА (строго, ничего лишнего):
+ВОПРОС: <текст вопроса>
+ВАРИАНТЫ:
+😡 Текст варианта 1
+🤷 Текст варианта 2
+😂 Текст варианта 3
+👍 Текст варианта 4
+
+Новость: {text[:400]}"""
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._gemini_model.generate_content(
+                    prompt,
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.7,
+                        max_output_tokens=200,
+                    ),
+                ),
+            )
+
+            if response and response.text:
+                raw = response.text.strip()
+                lines = [l.strip() for l in raw.splitlines() if l.strip()]
+
+                question = ""
+                options = []
+                in_options = False
+
+                for line in lines:
+                    if line.upper().startswith("ВОПРОС:"):
+                        question = line.split(":", 1)[1].strip()
+                    elif "ВАРИАНТЫ" in line.upper():
+                        in_options = True
+                    elif in_options and line:
+                        options.append(line[:100])
+
+                if question and len(options) >= 2:
+                    logger.info(f"Poll generated: '{question}' with {len(options)} options")
+                    return {"question": question[:300], "options": options[:4]}
+
+        except Exception as e:
+            logger.error(f"Poll generation failed: {e}")
+
+        return _fallback(text_lower)
+
 
     async def generate_keywords(self, text: str) -> list[str]:
         """Extract keywords from text for stock photo search."""
