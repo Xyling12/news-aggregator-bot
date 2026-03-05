@@ -1204,10 +1204,17 @@ async def process_new_post(post_id: int):
         keywords = await _rewriter.generate_keywords(original_text)
         stock_url = None
         if keywords:
-            stock_photos = await _media_processor.search_stock_photo(keywords)
-            if stock_photos:
-                stock_url = stock_photos[0]["url"]
-                logger.info(f"Post #{post_id}: stock photo found for '{' '.join(keywords)}'")
+            stock_photos = await _media_processor.search_stock_photo(keywords, count=5)
+            # AI relevance check — pick first photo that actually matches the news topic
+            for candidate in stock_photos[:3]:
+                url = candidate["url"]
+                is_relevant = await _rewriter.check_photo_relevance(original_text, url)
+                if is_relevant:
+                    stock_url = url
+                    logger.info(f"Post #{post_id}: stock photo approved for '{' '.join(keywords)}'")
+                    break
+            if not stock_url and stock_photos:
+                logger.info(f"Post #{post_id}: all stock photos failed relevance check — publishing without photo")
 
         if not stock_url and (has_watermark or post["media_type"] != "photo"):
             # No stock found but we must replace: use a random Izhevsk fallback

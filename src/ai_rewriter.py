@@ -553,6 +553,70 @@ class AIRewriter:
         # Fallback: topic-based keyword mapping without AI
         return self._extract_keywords_fallback(text)
 
+    async def check_photo_relevance(self, news_text: str, photo_url: str) -> bool:
+        """Check if a stock photo is relevant to the given news text using Gemini vision.
+
+        Downloads the photo and asks Gemini multimodal whether the image matches
+        the news topic. If Gemini is not available or any error occurs, returns True
+        (accept the photo) to avoid blocking post publication.
+
+        Returns:
+            True  — photo is relevant, use it
+            False — photo is irrelevant, try another or publish without photo
+        """
+        if not self._gemini_model:
+            return True  # No model → accept all photos
+
+        try:
+            from io import BytesIO
+            import PIL.Image
+
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(photo_url) as resp:
+                    if resp.status != 200:
+                        return True  # Can't download → accept
+                    image_bytes = await resp.read()
+
+            img = PIL.Image.open(BytesIO(image_bytes))
+
+            prompt = (
+                f"Посмотри на это фото и скажи, подходит ли оно к данной новости.\n\n"
+                f"Новость: {news_text[:300]}\n\n"
+                "Фото НЕ подходит если:\n"
+                "- Оно про совершенно другую тему (спорт для новости о транспорте, "
+                "природа для новости о суде, скалолазание для новости о троллейбусах)\n"
+                "- Изображение технической схемы/диаграммы для обычной новости\n"
+                "Фото ПОДХОДИТ если оно хотя бы отдалённо соответствует теме.\n\n"
+                "Ответь ТОЛЬКО одним словом: ДА или НЕТ."
+            )
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._gemini_model.generate_content(
+                    [prompt, img],
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.0,
+                        max_output_tokens=5,
+                    ),
+                ),
+            )
+
+            if response and response.text:
+                answer = response.text.strip().upper()
+                is_relevant = "ДА" in answer
+                logger.info(f"Photo relevance check: {'✅ relevant' if is_relevant else '❌ NOT relevant'} — {photo_url[:60]}")
+                return is_relevant
+
+        except ImportError:
+            logger.warning("PIL not available for photo relevance check")
+        except Exception as e:
+            logger.error(f"Photo relevance check failed: {e}")
+
+        return True  # On any error → accept photo to avoid blocking publication
+
+
     @staticmethod
     def _extract_keywords_fallback(text: str) -> list[str]:
         """Extract stock photo keywords using topic dictionary (no AI needed).
