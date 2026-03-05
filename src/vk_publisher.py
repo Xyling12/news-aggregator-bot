@@ -131,9 +131,11 @@ class VKPublisher:
             logger.error(f"VK API unexpected error [{method}]: {type(e).__name__}: {e}")
             return None
 
-    async def _upload_photo(self, photo_url: str) -> Optional[str]:
-        """Download a photo from URL and upload it to VK.
+    async def _upload_photo(self, photo_url: str, photo_path: Optional[str] = None) -> Optional[str]:
+        """Download a photo from URL (or read from local path) and upload it to VK.
         
+        If `photo_path` is set, the local file is used directly — no HTTP download needed.
+        This avoids 403 errors from Wikimedia/CDNs when re-downloading already-cached files.
         Returns VK photo attachment string like 'photo-123_456' or None on failure.
         """
         session = await self._get_session()
@@ -150,24 +152,34 @@ class VKPublisher:
         if not upload_url:
             return None
 
-        # Step 2: Download the photo from source URL
-        # Use a dedicated session with User-Agent — Wikimedia Commons returns 403 without it
-        _download_headers = {
-            "User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"
-        }
-        try:
-            async with aiohttp.ClientSession(headers=_download_headers) as dl_session:
-                async with dl_session.get(photo_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Photo download failed: HTTP {resp.status} from {photo_url}")
-                        return None
-                    photo_data = await resp.read()
-        except asyncio.TimeoutError:
-            logger.error(f"Photo download timeout (>30s): {photo_url}")
-            return None
-        except aiohttp.ClientError as e:
-            logger.error(f"Photo download network error: {type(e).__name__}: {e}")
-            return None
+        # Step 2: Get photo bytes — from local file or by downloading from URL
+        if photo_path and os.path.exists(photo_path):
+            # Use already-downloaded local file — avoids repeated HTTP request and 403 from CDNs
+            try:
+                with open(photo_path, "rb") as f:
+                    photo_data = f.read()
+                logger.info(f"VK photo: using local file {photo_path}")
+            except OSError as e:
+                logger.error(f"Failed to read local photo file {photo_path}: {e}")
+                return None
+        else:
+            # Use a dedicated session with User-Agent — Wikimedia Commons returns 403 without it
+            _download_headers = {
+                "User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"
+            }
+            try:
+                async with aiohttp.ClientSession(headers=_download_headers) as dl_session:
+                    async with dl_session.get(photo_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                        if resp.status != 200:
+                            logger.error(f"Photo download failed: HTTP {resp.status} from {photo_url}")
+                            return None
+                        photo_data = await resp.read()
+            except asyncio.TimeoutError:
+                logger.error(f"Photo download timeout (>30s): {photo_url}")
+                return None
+            except aiohttp.ClientError as e:
+                logger.error(f"Photo download network error: {type(e).__name__}: {e}")
+                return None
 
         # Step 3: Upload to VK
         try:
@@ -222,6 +234,7 @@ class VKPublisher:
         self,
         text: str,
         photo_url: Optional[str] = None,
+        photo_path: Optional[str] = None,
     ) -> Optional[int]:
         """
         Publish a post to the VK community wall.
@@ -229,6 +242,7 @@ class VKPublisher:
         Args:
             text: HTML-formatted post text (will be converted to plain text)
             photo_url: Optional URL of a photo to attach
+            photo_path: Optional local file path (preferred over photo_url — avoids CDN 403)
             
         Returns:
             VK post_id on success, None on failure
@@ -255,9 +269,9 @@ class VKPublisher:
             "message": vk_text,
         }
 
-        # Upload and attach photo if available
-        if photo_url:
-            attachment = await self._upload_photo(photo_url)
+        # Upload and attach photo if available (prefer local file to avoid CDN 403)
+        if photo_path or photo_url:
+            attachment = await self._upload_photo(photo_url or "", photo_path=photo_path)
             if attachment:
                 params["attachments"] = attachment
 

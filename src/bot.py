@@ -976,6 +976,7 @@ async def _publish_post(post: dict) -> bool:
     replacement_url = post.get("replacement_media_url")
 
     msg = None
+    local_stock: Optional[str] = None  # Will hold local path of downloaded stock photo for VK reuse
 
     # ── Try to publish with photo ─────────────────────────────────────────
     try:
@@ -1034,12 +1035,21 @@ async def _publish_post(post: dict) -> bool:
     # ── Cross-post to VK ──────────────────────────────────────────────────
     if _vk_publisher and _vk_publisher.enabled:
         try:
-            photo_for_vk = (
-                post.get("replacement_media_url")
-                or "https://images.unsplash.com/photo-1564769662533-4f00a87b4056?w=1200&q=80"
+            photo_for_vk_url = post.get("replacement_media_url")
+            # Priority: 1) local stock file (already on disk), 2) original TG photo file, 3) URL
+            photo_for_vk_path = (
+                local_stock
+                or (media_path if media_path and os.path.exists(media_path) else None)
             )
-            logger.info(f"Post #{post['id']}: starting VK crosspost (photo={'yes' if photo_for_vk else 'no'})")
-            vk_post_id = await _vk_publisher.publish(text, photo_url=photo_for_vk)
+            logger.info(
+                f"Post #{post['id']}: starting VK crosspost "
+                f"(photo={'local' if photo_for_vk_path else ('url' if photo_for_vk_url else 'none')})"
+            )
+            vk_post_id = await _vk_publisher.publish(
+                text,
+                photo_url=photo_for_vk_url,
+                photo_path=photo_for_vk_path,
+            )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
             else:
