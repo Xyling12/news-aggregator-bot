@@ -207,12 +207,7 @@ def format_post(text: str, hashtags: list) -> str:
     rubric_label, rubric_hashtag = detect_rubric(text)
     parts = []
 
-    # Rubric badge at top — stylish pill format
-    if rubric_label:
-        parts.append(f"<b>{rubric_label}</b>  <i>Ижевск Сегодня</i>")
-        parts.append("")
-
-    # Title (first line from AI output)
+    # Title (first line from AI output — already has emoji + topic)
     parts.append(f"<b>{lines[0].strip()}</b>")
     parts.append("")
 
