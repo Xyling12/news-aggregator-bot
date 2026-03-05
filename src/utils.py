@@ -24,6 +24,43 @@ def escape_html(text: str) -> str:
 
 # ── Text Cleaning ─────────────────────────────────────────────────────────────
 
+# ── Known media brands (case-insensitive, matched as standalone words) ────────
+# Any new brand can be appended here — no other changes needed.
+# Literal brand names (escaped verbatim)
+_MEDIA_BRANDS_LITERAL = [
+    "сусанин", "susanin",
+    "удм-инфо", "udm-info", "udminfo",
+    "ижевск онлайн", "izhevsk.ru",
+    "ижлайф", "izh.life",
+    "сусанин медиа",
+    "информ удмуртия",
+    "мк удмуртия", "аиф удмуртия",
+    "коммерсант ижевск",
+    "провэд", "глазов.ру", "сарапул.ру",
+    "рустем", "udmpravda", "udm-pravda",
+]
+
+# Compile: literal brands OR «ИА <Слово>» pattern
+_BRAND_RE = re.compile(
+    r'(?:' + r'|'.join(re.escape(b) for b in _MEDIA_BRANDS_LITERAL) + r'|\bиа\s+\w+)',
+    re.IGNORECASE,
+)
+
+# Generic inline patterns: "читайте в материале X", "по данным X", etc.
+# These are applied to the whole line text (not anchored to line start).
+_INLINE_STRIP_PATTERNS = [
+    # "читайте в новом материале Имя" / "читайте на сайте Имя"
+    re.compile(r'\bчитайте\s+(?:в\s+)?(?:новом\s+)?(?:материале?\s+)?[\w\s"]{2,35}\.?', re.IGNORECASE),
+    # "подробнее в материале Имя" / "подробнее на сайте"
+    re.compile(r'\bподробнее\s+(?:в\s+материале?|на\s+сайте)[^.\n]*\.?', re.IGNORECASE),
+    # "материал подготовлен / опубликован / предоставлен X"
+    re.compile(r'\bматериал\s+(?:подготовлен|опубликован|предоставлен)[^.\n]*\.?', re.IGNORECASE),
+    # "по информации / по данным / по сообщению Издание"
+    re.compile(r'\bпо\s+(?:информации|данным|сообщению)\s+[\w\s"]{2,35}\.?', re.IGNORECASE),
+    # "источник: Что-то" inline (not caught by line-level skip)
+    re.compile(r'\bисточник\s*:\s*[^.\n]+\.?', re.IGNORECASE),
+]
+
 _SKIP_PATTERNS = [
     r'подписаться на',
     r'подписывайтесь',
@@ -63,8 +100,22 @@ _SKIP_PATTERNS = [
 ]
 
 
+def _strip_inline_brands(line: str) -> str:
+    """Remove inline brand mentions and generic 'read more at X' phrases."""
+    # Remove specific known brand names
+    line = _BRAND_RE.sub('', line)
+    # Remove generic publisher reference patterns
+    for pat in _INLINE_STRIP_PATTERNS:
+        line = pat.sub('', line)
+    # Tidy up: collapse multiple spaces and strip dangling punctuation
+    line = re.sub(r'[ \t]{2,}', ' ', line)
+    line = re.sub(r'(?<=[а-яёa-z])\s*[—–-]\s*$', '', line.strip())
+    return line.strip()
+
+
 def clean_text(text: str) -> str:
-    """Remove source attribution lines, subscribe links, and external URLs.
+    """Remove source attribution lines, subscribe links, external URLs,
+    and inline mentions of publisher brands / 'read more at X' phrases.
 
     Strips promotional/CTA lines that are injected by source channels so
     that the AI rewriter and deduplication logic work on pure content.
@@ -77,7 +128,11 @@ def clean_text(text: str) -> str:
             cleaned.append(line)
             continue
         skip = any(re.search(pat, line_lower) for pat in _SKIP_PATTERNS)
-        if not skip:
+        if skip:
+            continue
+        # Inline brand/publisher removal
+        line = _strip_inline_brands(line)
+        if line:  # Don't add blank lines created by stripping
             cleaned.append(line)
     return '\n'.join(cleaned).rstrip()
 
