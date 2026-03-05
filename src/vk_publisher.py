@@ -151,12 +151,17 @@ class VKPublisher:
             return None
 
         # Step 2: Download the photo from source URL
+        # Use a dedicated session with User-Agent — Wikimedia Commons returns 403 without it
+        _download_headers = {
+            "User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"
+        }
         try:
-            async with session.get(photo_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status != 200:
-                    logger.error(f"Photo download failed: HTTP {resp.status} from {photo_url}")
-                    return None
-                photo_data = await resp.read()
+            async with aiohttp.ClientSession(headers=_download_headers) as dl_session:
+                async with dl_session.get(photo_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status != 200:
+                        logger.error(f"Photo download failed: HTTP {resp.status} from {photo_url}")
+                        return None
+                    photo_data = await resp.read()
         except asyncio.TimeoutError:
             logger.error(f"Photo download timeout (>30s): {photo_url}")
             return None
