@@ -1130,7 +1130,10 @@ async def process_new_post(post_id: int):
         return
 
     # Step 0d: Breaking news detection — auto-publish without moderation
-    is_breaking = any(kw in text_lower for kw in _config.breaking_keywords)
+    # Radar/БПЛА channels always treated as breaking (air-defense alerts, etc.)
+    _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
+    is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
+    is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
 
     # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
     await _db.update_post_status(post_id, "rewriting")
