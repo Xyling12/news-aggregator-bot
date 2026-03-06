@@ -673,6 +673,7 @@ class AIRewriter:
 - Абстракции: news, information, article, report, technology, digital, modern
 - Технические объекты, которые плохо смотрятся: pipe, tube, wire, equipment (если не это главная суть)
 - Слова, которые дадут технические фото вместо репортажных
+- ЗАПРЕЩЕНО: military vehicle, air force truck, US army, NATO vehicle, warship, fighter jet, missile — иностранная военная техника
 
 ПРАВИЛА:
 - Описывай ЛЮДЕЙ в СИТУАЦИИ, а не объект (teacher NOT bell, students NOT ring)
@@ -686,8 +687,10 @@ class AIRewriter:
 - Новость про зарплаты учителей → "teacher classroom, school education russia"
 - Новость про ремонт дороги → "road construction workers, highway asphalt"
 - Новость про застройщиков мошенников → "fraud court justice, police handcuffs"
-- Новость про погоду → "winter city street, people snow city"
+- Новость про погоду / сугробы / снег → "snowy city street, people winter snow" (НЕ "snow tire chains")
 - Новость про больницу/медицину → "doctor hospital patient, medical workers"
+- Новость про БПЛА / опасное небо / угрозу атаки → "school evacuation drill, civil defense warning, children safety" (НЕ "military vehicle, air force")
+- Новость про военное положение/обстрелы → "bomb shelter interior, citizens bunker, safety drill"
 
 Ответь ТОЛЬКО словами через запятую, без объяснений.
 
@@ -711,10 +714,14 @@ class AIRewriter:
                     # Abstract/design
                     "abstract", "concept", "symbol", "icon", "background", "digital", "modern",
                     "technology",
-                    # Sport/fitness — these get triggered by "движение" (movement/traffic)
+                    # Sport/fitness — these get triggered by «движение» (movement/traffic)
                     "climbing", "sport", "fitness", "gym", "exercise", "athlete", "workout",
                     "athletic", "mountain", "boulder", "competition", "race", "runner",
                     "jump", "jumping", "sports", "movement", "motion", "activity",
+                    # Foreign military hardware — causes US/NATO vehicle photos
+                    "military vehicle", "air force", "military truck", "warplane", "fighter jet",
+                    "military aircraft", "warship", "army vehicle", "military equipment",
+                    "missile launcher", "armored vehicle", "military strike", "drone attack",
                 }
                 keywords = [kw for kw in keywords if kw and kw not in bad_keywords]
                 # If AI returned only bad words, fall through to reliable fallback
@@ -810,8 +817,8 @@ class AIRewriter:
              ["fire", "firefighters", "flames"]),
             (["авария", "дтп", "столкновение"],
              ["car accident", "traffic", "road"]),
-            (["взрыв", "взрывч", "беспилот", "атак", "обстрел"],
-             ["explosion", "drone attack", "military strike"]),
+            (["взрыв", "взрывч", "беспилот", "атак", "обстрел", "опасное небо", "бпла", "угроз"],
+             ["civil defense siren", "school evacuation", "safety warning"]),
             (["полиция", "задержан", "арест", "преступ"],
              ["police", "law enforcement", "justice"]),
             # Nature / weather — before hospital so «осмотрели в больнице» doesn't win
@@ -837,9 +844,9 @@ class AIRewriter:
              ["court", "justice", "law"]),
             (["спорт", "матч", "команд", "чемпион"],
              ["sport", "competition", "athletes"]),
-            # Geopolitics
+            # Geopolitics — use neutral visuals, NOT foreign military equipment
             (["армия", "воен", "солдат", "флот", "вмс", "нато"],
-             ["military", "navy", "defense"]),
+             ["government meeting", "security officials", "ministry building"]),
             (["нефт", "газ", "топлив", "энерг"],
              ["oil", "gas", "energy"]),
             (["выбор", "политик", "депутат", "власт"],
