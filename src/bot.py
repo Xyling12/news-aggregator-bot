@@ -1227,10 +1227,12 @@ async def process_new_post(post_id: int):
     is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
     is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
 
-    # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
+    # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
     await _db.update_post_status(post_id, "rewriting")
+    _ai_hashtags: list = []
+    _ai_photo_keywords: list = []
     async with _ai_semaphore:
-        rewritten, engine = await _rewriter.rewrite(original_text)
+        rewritten, engine, _ai_hashtags, _ai_photo_keywords = await _rewriter.rewrite_full(original_text)
 
     if rewritten:
         rewritten = _clean_text(rewritten)  # Clean AI output too
@@ -1255,11 +1257,8 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
         return
 
-    # Step 2.5: Generate hashtags
-    hashtags = await _rewriter.generate_hashtags(rewritten)
-
-    # Step 2.6: Format post with premium template
-    rewritten = _format_post(rewritten, hashtags)
+    # Step 2.5: Format post (hashtags already from rewrite_full)
+    rewritten = _format_post(rewritten, _ai_hashtags)
 
     await _db.update_post_rewrite(post_id, rewritten)
 
@@ -1281,7 +1280,8 @@ async def process_new_post(post_id: int):
         "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
     ]
     try:
-        keywords = await _rewriter.generate_keywords(original_text)
+        # Use photo keywords from rewrite_full (already fetched, no extra Gemini call needed)
+        keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
         stock_url = None
         if keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords, count=5)

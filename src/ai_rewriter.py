@@ -253,6 +253,134 @@ class AIRewriter:
         logger.error("All AI rewrite engines failed")
         return None, "error"
 
+    async def rewrite_full(
+        self, original_text: str
+    ) -> Tuple[Optional[str], str, list[str], list[str]]:
+        """Efficient all-in-one: rewrite + hashtags + photo keywords in ONE Gemini call.
+
+        Returns:
+            (rewritten_text or None, engine_name, hashtags_list, photo_keywords_list)
+
+        Falls back to calling rewrite()/generate_hashtags()/generate_keywords() separately
+        if the combined prompt fails.
+        """
+        import re as _re
+
+        COMBINED_PROMPT = f"""Ты — главный редактор Telegram-канала «Ижевск Сегодня».
+
+Твоя задача по данной новости — выполнить ТРИ действия сразу и вернуть ответ СТРОГО в указанном формате.
+
+ДЕЙСТВИЕ 1 — РЕРАЙТ:
+Полностью перепиши новость своим языком. Правила:
+- Заголовок (первая строка): чёткий, без кликбейта, до 80 символов
+- 2-5 абзацев, живой язык, НЕ канцелярит
+- Запрещено: «подписывайся», источник оригинала, реклама
+- Используй эмодзи уместно (1-2 штуки)
+
+ДЕЙСТВИЕ 2 — ХЭШТЕГИ:
+2-4 хэштега для новости. Обязательно #Ижевск или #Удмуртия если про регион.
+Допустимые тематические: #экономика #здоровье #образование #транспорт #жкх #общество #закон #технологии #политика
+
+ДЕЙСТВИЕ 3 — КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФОТО (на английском):
+2-3 слова для поиска стокового фото. Описывай ЛЮДЕЙ в СИТУАЦИИ (не абстракции, не «news», не «technology»).
+Примеры: "schoolchildren classroom", "doctor hospital patient", "road construction workers"
+
+ФОРМАТ ОТВЕТА (строго, ничего лишнего кроме этих блоков):
+РЕРАЙТ:
+<переписанный текст>
+ХЭШТЕГИ:
+<хэштеги через пробел>
+ФОТО:
+<ключевые слова через запятую>
+
+Исходная новость:
+{original_text}"""
+
+        # ── Try combined Gemini call ─────────────────────────────────────
+        if self._gemini_models:
+            loop = asyncio.get_event_loop()
+            for model_name, model in self._gemini_models:
+                try:
+                    _prompt = COMBINED_PROMPT
+                    _model = model
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: _model.generate_content(
+                            _prompt,
+                            generation_config=genai.GenerationConfig(
+                                temperature=0.85,
+                                max_output_tokens=2048,
+                            ),
+                            safety_settings=SAFETY_SETTINGS if _HAS_SAFETY else None,
+                        ),
+                    )
+
+                    if response and response.text:
+                        raw = response.text.strip()
+
+                        # Parse РЕРАЙТ block
+                        rewrite_match = _re.search(
+                            r'РЕРАЙТ:\s*\n(.*?)(?=\nХЭШТЕГИ:|$)',
+                            raw, _re.DOTALL
+                        )
+                        hashtag_match = _re.search(
+                            r'ХЭШТЕГИ:\s*\n(.*?)(?=\nФОТО:|$)',
+                            raw, _re.DOTALL
+                        )
+                        photo_match = _re.search(
+                            r'ФОТО:\s*\n(.*?)$',
+                            raw, _re.DOTALL
+                        )
+
+                        rewritten = rewrite_match.group(1).strip() if rewrite_match else None
+                        hashtags_raw = hashtag_match.group(1).strip() if hashtag_match else ""
+                        photo_raw = photo_match.group(1).strip() if photo_match else ""
+
+                        if rewritten and not self._is_refusal(rewritten) and len(rewritten) > 50:
+                            # Parse hashtags
+                            hashtags = [
+                                t.strip() for t in hashtags_raw.split()
+                                if t.strip().startswith("#")
+                            ][:4]
+
+                            # Parse photo keywords
+                            bad_keywords = {
+                                "news", "information", "article", "report", "update",
+                                "abstract", "concept", "technology", "digital", "modern",
+                                "bell", "ring", "sound", "alarm", "signal",
+                                "sport", "fitness", "gym", "workout", "climbing",
+                            }
+                            photo_keywords = [
+                                kw.strip().lower()
+                                for kw in photo_raw.split(",")
+                                if kw.strip() and kw.strip().lower() not in bad_keywords
+                            ][:3]
+
+                            uniqueness = self.calculate_uniqueness(original_text, rewritten)
+                            logger.info(
+                                f"rewrite_full [{model_name}]: OK — "
+                                f"uniqueness {uniqueness:.0%}, "
+                                f"{len(hashtags)} tags, {len(photo_keywords)} photo kw "
+                                f"(1 API call instead of 3)"
+                            )
+                            return rewritten, model_name, hashtags, photo_keywords
+
+                        logger.warning(f"rewrite_full [{model_name}]: parse failed or refusal, raw={raw[:100]}")
+
+                except Exception as e:
+                    err = str(e).lower()
+                    if "429" in err or "quota" in err or "resource" in err:
+                        logger.warning(f"rewrite_full [{model_name}]: quota hit, trying next model")
+                        continue
+                    logger.error(f"rewrite_full [{model_name}]: {e}")
+
+        # ── Fallback: call old methods separately ────────────────────────
+        logger.warning("rewrite_full: combined call failed, falling back to separate methods")
+        rewritten, engine = await self.rewrite(original_text)
+        hashtags = await self.generate_hashtags(rewritten or original_text)
+        photo_keywords = await self.generate_keywords(original_text)
+        return rewritten, engine, hashtags, photo_keywords
+
     async def ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
         """Generic AI text generation with Gemini→YandexGPT fallback.
 
