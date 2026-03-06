@@ -9,8 +9,10 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable, List
 
+import aiohttp
+
 from aiogram import Bot
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, BufferedInputFile
 from aiogram.enums import ParseMode
 
 from src.config import Config
@@ -191,13 +193,34 @@ class ContentScheduler:
                     )
                     logger.info(f"✅ Published {label} with photo to {target}")
                 except Exception as photo_err:
-                    logger.warning(f"Photo send failed ({photo_err}), sending text only")
-                    msg = await self.bot.send_message(
-                        target,
-                        text[:4096],
-                        parse_mode=ParseMode.HTML,
-                    )
-                    logger.info(f"✅ Published {label} (text only) to {target}")
+                    logger.warning(f"Photo send by URL failed ({photo_err}), trying file upload")
+                    # Telegram can't fetch some URLs (Wikimedia CDN, etc.) — download locally
+                    uploaded = False
+                    try:
+                        headers = {"User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"}
+                        async with aiohttp.ClientSession(headers=headers) as session:
+                            async with session.get(photo_url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                                if resp.status == 200:
+                                    img_bytes = await resp.read()
+                                    if len(img_bytes) > 1000:
+                                        input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
+                                        msg = await self.bot.send_photo(
+                                            target,
+                                            photo=input_file,
+                                            caption=text[:1024],
+                                            parse_mode=ParseMode.HTML,
+                                        )
+                                        logger.info(f"✅ Published {label} with photo (file upload) to {target}")
+                                        uploaded = True
+                    except Exception as upload_err:
+                        logger.warning(f"Photo file upload also failed ({upload_err}), sending text only")
+                    if not uploaded:
+                        msg = await self.bot.send_message(
+                            target,
+                            text[:4096],
+                            parse_mode=ParseMode.HTML,
+                        )
+                        logger.info(f"✅ Published {label} (text only) to {target}")
             else:
                 msg = await self.bot.send_message(
                     target,
