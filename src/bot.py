@@ -1229,9 +1229,11 @@ async def process_new_post(post_id: int):
 
     # Step 0b-pre: Detect breaking news FIRST — before any other filters
     # Breaking news bypasses deduplication (each source's alert is valuable)
+    # NOTE: is_radar_source alone does NOT make a post breaking — only the TEXT content
+    # determines urgency. Radar channels post donation requests, announcements, etc. too.
     _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
     is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
-    is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
+    is_breaking = any(kw in text_lower for kw in _config.breaking_keywords)
 
     if is_breaking:
         logger.info(f"Post #{post_id}: ⚡ BREAKING NEWS detected — skipping all filters")
