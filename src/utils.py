@@ -140,28 +140,32 @@ def clean_text(text: str) -> str:
 # ── Similarity / Deduplication ────────────────────────────────────────────────
 
 def word_overlap(text1: str, text2: str) -> float:
-    """Return word-overlap ratio between two texts (0.0–1.0).
+    """Return Jaccard similarity between two texts (0.0–1.0).
 
-    Only words longer than 4 characters are considered so that common
-    stop-words and conjunctions don't inflate the similarity score.
+    Uses intersection / union (Jaccard) instead of intersection / min so that
+    short posts don't get unfairly penalised. Only words longer than 4
+    characters are considered to filter out stop-words.
     """
     words1 = {w for w in re.findall(r'[а-яёa-z0-9]+', text1.lower()) if len(w) > 4}
     words2 = {w for w in re.findall(r'[а-яёa-z0-9]+', text2.lower()) if len(w) > 4}
     if not words1 or not words2:
         return 0.0
-    return len(words1 & words2) / min(len(words1), len(words2))
+    union = words1 | words2
+    if not union:
+        return 0.0
+    return len(words1 & words2) / len(union)
 
 
 def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
     """Return True if *text* is too similar to any text in *candidates*.
 
     Two-tier check:
-      1. Cosine-like uniqueness via AIRewriter.calculate_uniqueness (>0.82 similarity).
-      2. Word-overlap ratio (>0.85).
+      1. Cosine-like uniqueness via AIRewriter.calculate_uniqueness (>0.88 similarity).
+      2. Jaccard word-overlap ratio (>0.72).
 
-    Thresholds are intentionally high because regional news always contains
-    shared geo-words (Ижевск, Удмуртия, жители) that inflate apparent similarity.
-    Only near-identical texts should be blocked as duplicates.
+    Thresholds are calibrated for short regional news posts. Short posts about
+    the same event from different sources should NOT be blocked — only
+    near-identical copy-paste duplicates should be caught.
 
     The *rewriter* argument is the AIRewriter instance (passed in to avoid
     a circular import between utils ↔ ai_rewriter).
@@ -170,9 +174,9 @@ def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
         if not existing or existing == text:
             continue
         similarity = 1.0 - rewriter.calculate_uniqueness(text, existing)
-        if similarity > 0.82:
+        if similarity > 0.88:   # very high: almost same text
             return True
-        if word_overlap(text, existing) > 0.85:
+        if word_overlap(text, existing) > 0.72:  # Jaccard: stricter threshold
             return True
     return False
 
