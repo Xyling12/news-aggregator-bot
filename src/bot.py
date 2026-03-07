@@ -381,7 +381,6 @@ async def cmd_help(message: Message):
         "/sources — Управление источниками\n"
         "/publish — Опубликовать одобренные посты\n"
         "/report — Недельный отчёт\n"
-        "/rejected — Последние отклонённые посты (диагностика)\n"
         "/help — Это сообщение"
     )
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
@@ -610,48 +609,6 @@ async def cmd_report(message: Message):
         text += f"  • @{src}: {count}\n"
 
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
-
-
-@router.message(Command("rejected"))
-async def cmd_rejected(message: Message):
-    """Show last rejected posts for diagnostics — admin only."""
-    if not is_admin(message.from_user.id):
-        return
-
-    cursor = await _db._db.execute(
-        "SELECT id, source_channel, original_text, rewritten_text, created_at "
-        "FROM posts WHERE status = 'rejected' "
-        "ORDER BY created_at DESC LIMIT 5"
-    )
-    rows = await cursor.fetchall()
-
-    if not rows:
-        await message.answer("📭 Нет отклонённых постов за последнее время.")
-        return
-
-    await message.answer(f"🗑 <b>Последние {len(rows)} отклонённых постов:</b>", parse_mode=ParseMode.HTML)
-    for row in rows:
-        reason = row[3] or "причина не записана"
-        # Detect if reason is actual rejection reason (starts with [REJECT]) or real rewritten text
-        if not reason.startswith("[REJECT]"):
-            reason = "причина не записана (старый формат)"
-        else:
-            reason = reason[len("[REJECT]"):].strip()
-
-        text_preview = (row[2] or "")[:200].replace("<", "&lt;").replace(">", "&gt;")
-        try:
-            from datetime import datetime as _dt
-            ts = _dt.fromisoformat(str(row[4])).strftime("%d.%m %H:%M")
-        except Exception:
-            ts = str(row[4])[:16]
-
-        msg = (
-            f"❌ <b>Пост #{row[0]}</b> | @{row[1]} | {ts}\n"
-            f"<i>Причина: {_escape_html(reason)}</i>\n\n"
-            f"{text_preview}..."
-        )
-        await message.answer(msg, parse_mode=ParseMode.HTML)
-        await asyncio.sleep(0.3)
 
 
 # ── Callback Handlers ────────────────────────────────────────────────────
@@ -1209,14 +1166,14 @@ async def process_new_post(post_id: int):
         "подробности — читайте в карточках",
     ]
     if any(w in text_lower for w in _HARD_AD_WORDS):
-        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] реклама/спам (жёсткое правило)")
+        await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: hard ad keyword matched")
         return
 
     # Tier 2: soft stop — 2+ generic ad words
     ad_matches = [w for w in _config.ad_stop_words if w in text_lower]
     if len(ad_matches) >= 2:  # 2+ ad stop-words = spam
-        await _db.update_post_status(post_id, "rejected", rewritten_text=f"[REJECT] реклама/спам: {', '.join(ad_matches[:3])}")
+        await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: ad/spam (matched: {', '.join(ad_matches[:3])})")
         return
 
@@ -1224,66 +1181,69 @@ async def process_new_post(post_id: int):
 
     # Step 0b: Relevance filter for federal channels
     source = post["source_channel"].lower()
-    local_keywords = ["izhevsk", "izh", "udm", "удмурт", "ижевск", "18"]
-    is_local = any(kw in source for kw in local_keywords)
 
-    # Step 0b-pre: Detect breaking news FIRST — before any other filters
-    # Breaking news bypasses deduplication (each source's alert is valuable)
-    # NOTE: is_radar_source alone does NOT make a post breaking — only the TEXT content
-    # determines urgency. Radar channels post donation requests, announcements, etc. too.
+    # Channels whose username contains these fragments are treated as local without geo-check
+    _LOCAL_SOURCE_KEYWORDS = [
+        "izhevsk", "izh", "udm", "удмурт", "ижевск", "18",
+        "radar", "vrv", "izhlife", "udm18", "ижlife", "иж18",
+        "радар", "ижевск", "удмуртия", "вятка", "ижнет",
+    ]
+    # Fully-trusted channels: always pass without geo-filter regardless of username
+    _TRUSTED_LOCAL_CHANNELS = [
+        "vrv_radar", "vrv radar", "izhevsk_today", "izhlife",
+        "udmurtia_news", "izh_radar", "radar18",
+    ]
+
+    is_local = (
+        any(kw in source for kw in _LOCAL_SOURCE_KEYWORDS)
+        or any(trusted in source for trusted in _TRUSTED_LOCAL_CHANNELS)
+    )
+
+    if not is_local:
+        # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
+        _GEO_KEYWORDS = [
+            "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
+            "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
+            "республика удмуртия", "столица удмуртии",
+        ]
+        has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
+        if not has_geo:
+            await _db.update_post_status(post_id, "rejected")
+            logger.info(
+                f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
+                f"in non-local channel @{source}"
+            )
+            return
+
+        # Secondary AI check for nuanced relevance (only if geo check passed)
+        is_relevant = await _rewriter.check_relevance(original_text)
+        if not is_relevant:
+            await _db.update_post_status(post_id, "rejected")
+            logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
+            return
+
+    # Step 0c: Deduplication — smart two-tier check
+    # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
+    published_texts = await _db.get_texts_by_status(["published"], hours=12)
+    if _is_similar_to_any(original_text, published_texts):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: similar to published post")
+        return
+
+    # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
+    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
+    if _is_similar_to_any(original_text, queued_texts):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: similar post already in queue")
+        return
+
+    # Step 0d: Breaking news detection — auto-publish without moderation
+    # Radar/БПЛА channels always treated as breaking (air-defense alerts, etc.)
     _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
     is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
-    is_breaking = any(kw in text_lower for kw in _config.breaking_keywords)
+    is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
 
-    if is_breaking:
-        logger.info(f"Post #{post_id}: ⚡ BREAKING NEWS detected — skipping all filters")
-    else:
-        if not is_local:
-            # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
-            _GEO_KEYWORDS = [
-                "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
-                "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
-            ]
-            has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
-            if not has_geo:
-                await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] нет ключевых слов Ижевск/Удмуртия (федеральный канал)")
-                logger.info(
-                    f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
-                    f"in non-local channel @{source}"
-                )
-                return
-
-            # Secondary AI check for nuanced relevance (only if geo check passed)
-            is_relevant = await _rewriter.check_relevance(original_text)
-            if not is_relevant:
-                await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: новость не относится к Ижевску/Удмуртии")
-                logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
-                return
-
-        # Step 0c: Deduplication — smart two-tier check (skipped for breaking news)
-        # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
-        published_texts = await _db.get_texts_by_status(["published"], hours=12)
-        if _is_similar_to_any(original_text, published_texts):
-            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] дубликат уже опубликованного поста")
-            logger.info(f"Post #{post_id} rejected: similar to published post")
-            return
-
-        # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
-        queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
-        if _is_similar_to_any(original_text, queued_texts):
-            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] похожий пост уже в очереди")
-            logger.info(f"Post #{post_id} rejected: similar post already in queue")
-            return
-
-        # Step 0d: Urgency filter — only for federal non-breaking channels
-        if not is_local:
-            is_urgent = await _rewriter.check_urgency(original_text)
-            if not is_urgent:
-                await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: неважная новость для жителей Ижевска")
-                logger.info(f"Post #{post_id} rejected: not important/urgent enough (federal channel @{source})")
-                return
-
-    # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
+    # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
     await _db.update_post_status(post_id, "rewriting")
     _ai_hashtags: list = []
     _ai_photo_keywords: list = []
@@ -1295,7 +1255,7 @@ async def process_new_post(post_id: int):
 
         # Guard: if AI returned a refusal message — reject post immediately
         if _rewriter._is_refusal(rewritten):
-            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI отказался переписывать")
+            await _db.update_post_status(post_id, "rejected")
             logger.warning(f"Post #{post_id} rejected: AI refusal detected in rewritten text")
             return
 
@@ -1309,7 +1269,7 @@ async def process_new_post(post_id: int):
     # (must be done before format_post adds the same footer/hashtags to every post)
     published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=12)
     if _is_similar_to_any(rewritten, published_rewritten):
-        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] дубликат после рерайта")
+        await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
         return
 
@@ -1328,46 +1288,18 @@ async def process_new_post(post_id: int):
             logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
 
     # Step 3b: Find stock photo.
-    # NOTE: Wikimedia CDN is blocked from Beget VPS — use Unsplash Source (free, no key, stable)
-    # Unsplash Source: https://source.unsplash.com/{photo_id}/{width}x{height}
-
-    # Curated Unsplash city/urban fallback photos
+    # Always search; mandatory if watermark detected (must replace the original).
+    # Fallback to a curated Izhevsk photo if no stock found.
     _IZHEVSK_FALLBACK_PHOTOS = [
-        "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?w=1280&fit=crop",  # city night
-        "https://images.unsplash.com/photo-1486325212027-8081e485255e?w=1280&fit=crop",  # city street
-        "https://images.unsplash.com/photo-1519501025264-65ba15a82390?w=1280&fit=crop",  # urban
-        "https://images.unsplash.com/photo-1444723121867-7a241cacace9?w=1280&fit=crop",  # city view
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Izhevsk_letom.jpg/1280px-Izhevsk_letom.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Izhevsk_city_centre.jpg/1280px-Izhevsk_city_centre.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
     ]
-
-    # Curated winter/snow Unsplash photos — avoids "tire chains" results
-    _IZHEVSK_WINTER_PHOTOS = [
-        "https://images.unsplash.com/photo-1491002052546-bf38f186af56?w=1280&fit=crop",  # winter city
-        "https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=1280&fit=crop",  # snow street
-        "https://images.unsplash.com/photo-1418985991508-e47386d96a71?w=1280&fit=crop",  # snowy street
-        "https://images.unsplash.com/photo-1548777123-e216912df7d8?w=1280&fit=crop",  # winter road
-        "https://images.unsplash.com/photo-1611288875785-5c7f8ceee5a5?w=1280&fit=crop",  # snow city
-    ]
-
-    _WEATHER_KEYWORDS = {
-        "снег", "снегопад", "метель", "мороз", "погода", "гололёд",
-        "гололед", "снежный", "снежная", "заморозк", "похолодан",
-        "осадк", "сугроб", "вьюг", "слякоть", "туман",
-    }
-
-    import random
     try:
-        # Check if this is a weather/snow post — use curated photos to avoid "tire chains" garbage
-        text_lower_check = original_text.lower()
-        is_weather_post = any(kw in text_lower_check for kw in _WEATHER_KEYWORDS)
-
+        # Use photo keywords from rewrite_full (already fetched, no extra Gemini call needed)
         keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
         stock_url = None
-
-        if is_weather_post:
-            # Use curated winter photos — always better than stock search for weather
-            stock_url = random.choice(_IZHEVSK_WINTER_PHOTOS)
-            logger.info(f"Post #{post_id}: weather post — using curated winter photo")
-        elif keywords:
+        if keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords, count=5)
             # AI relevance check — pick first photo that actually matches the news topic
             for candidate in stock_photos[:3]:
@@ -1381,13 +1313,10 @@ async def process_new_post(post_id: int):
                 logger.info(f"Post #{post_id}: all stock photos failed relevance check — publishing without photo")
 
         if not stock_url and (has_watermark or post["media_type"] != "photo"):
-            if not is_breaking:
-                # No stock found, not breaking: use general city fallback
-                stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
-                logger.info(f"Post #{post_id}: using city fallback photo (Unsplash)")
-            else:
-                # Breaking news: publish text-only, no fallback (urgency > aesthetics)
-                logger.info(f"Post #{post_id}: breaking news, no photo — publishing text-only")
+            # No stock found but we must replace: use a random Izhevsk fallback
+            import random
+            stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
+            logger.info(f"Post #{post_id}: using Izhevsk fallback photo")
 
         if stock_url:
             await _db.update_post_media(post_id, replacement_url=stock_url)
