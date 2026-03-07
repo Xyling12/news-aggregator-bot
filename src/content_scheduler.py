@@ -181,6 +181,23 @@ class ContentScheduler:
         except ImportError:
             pass  # Safety: never block publication due to import errors
 
+        # Convert any leftover Markdown to Telegram HTML (safety net — prompts forbid Markdown,
+        # but AI sometimes ignores instructions)
+        import re as _re
+        def _md_to_html(t: str) -> str:
+            # **bold** → <b>bold</b>
+            t = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t, flags=_re.DOTALL)
+            # *italic* or _italic_ → <i>italic</i>
+            t = _re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', t, flags=_re.DOTALL)
+            t = _re.sub(r'__(.+?)__', r'<i>\1</i>', t, flags=_re.DOTALL)
+            # `code` → <code>code</code>
+            t = _re.sub(r'`(.+?)`', r'<code>\1</code>', t)
+            # Remove bare # headers (just strip the #)
+            t = _re.sub(r'^#{1,3}\s*', '', t, flags=_re.MULTILINE)
+            return t
+
+        text = _md_to_html(text)
+
         # Publish with photo if available
         try:
             if photo_url:
