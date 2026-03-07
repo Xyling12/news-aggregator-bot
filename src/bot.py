@@ -1333,11 +1333,36 @@ async def process_new_post(post_id: int):
         "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Izhevsk_city_centre.jpg/1280px-Izhevsk_city_centre.jpg",
         "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
     ]
+
+    # Curated winter/snow photos of Izhevsk — avoids garbage "tire chains" results
+    _IZHEVSK_WINTER_PHOTOS = [
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/6/65/Izhevsk_winter.jpg/1280px-Izhevsk_winter.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Izhevsk_in_winter.jpg/1280px-Izhevsk_in_winter.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/9/9d/Izhevsk_embankment_winter.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Izhevsk_зима.jpg/1280px-Izhevsk_зима.jpg",
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
+    ]
+
+    _WEATHER_KEYWORDS = {
+        "снег", "снегопад", "метель", "мороз", "погода", "гололёд",
+        "гололед", "снежный", "снежная", "заморозк", "похолодан",
+        "осадк", "сугроб", "вьюг", "слякоть", "туман",
+    }
+
+    import random
     try:
-        # Use photo keywords from rewrite_full (already fetched, no extra Gemini call needed)
+        # Check if this is a weather/snow post — use curated photos to avoid "tire chains" garbage
+        text_lower_check = original_text.lower()
+        is_weather_post = any(kw in text_lower_check for kw in _WEATHER_KEYWORDS)
+
         keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
         stock_url = None
-        if keywords:
+
+        if is_weather_post:
+            # Use curated winter Izhevsk photos — always better than stock search for weather
+            stock_url = random.choice(_IZHEVSK_WINTER_PHOTOS)
+            logger.info(f"Post #{post_id}: weather post — using curated winter Izhevsk photo")
+        elif keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords, count=5)
             # AI relevance check — pick first photo that actually matches the news topic
             for candidate in stock_photos[:3]:
