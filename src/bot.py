@@ -381,6 +381,7 @@ async def cmd_help(message: Message):
         "/sources — Управление источниками\n"
         "/publish — Опубликовать одобренные посты\n"
         "/report — Недельный отчёт\n"
+        "/rejected — Последние отклонённые посты (диагностика)\n"
         "/help — Это сообщение"
     )
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
@@ -609,6 +610,48 @@ async def cmd_report(message: Message):
         text += f"  • @{src}: {count}\n"
 
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
+
+
+@router.message(Command("rejected"))
+async def cmd_rejected(message: Message):
+    """Show last rejected posts for diagnostics — admin only."""
+    if not is_admin(message.from_user.id):
+        return
+
+    cursor = await _db._db.execute(
+        "SELECT id, source_channel, original_text, rewritten_text, created_at "
+        "FROM posts WHERE status = 'rejected' "
+        "ORDER BY created_at DESC LIMIT 5"
+    )
+    rows = await cursor.fetchall()
+
+    if not rows:
+        await message.answer("📭 Нет отклонённых постов за последнее время.")
+        return
+
+    await message.answer(f"🗑 <b>Последние {len(rows)} отклонённых постов:</b>", parse_mode=ParseMode.HTML)
+    for row in rows:
+        reason = row[3] or "причина не записана"
+        # Detect if reason is actual rejection reason (starts with [REJECT]) or real rewritten text
+        if not reason.startswith("[REJECT]"):
+            reason = "причина не записана (старый формат)"
+        else:
+            reason = reason[len("[REJECT]"):].strip()
+
+        text_preview = (row[2] or "")[:200].replace("<", "&lt;").replace(">", "&gt;")
+        try:
+            from datetime import datetime as _dt
+            ts = _dt.fromisoformat(str(row[4])).strftime("%d.%m %H:%M")
+        except Exception:
+            ts = str(row[4])[:16]
+
+        msg = (
+            f"❌ <b>Пост #{row[0]}</b> | @{row[1]} | {ts}\n"
+            f"<i>Причина: {_escape_html(reason)}</i>\n\n"
+            f"{text_preview}..."
+        )
+        await message.answer(msg, parse_mode=ParseMode.HTML)
+        await asyncio.sleep(0.3)
 
 
 # ── Callback Handlers ────────────────────────────────────────────────────
@@ -1166,14 +1209,14 @@ async def process_new_post(post_id: int):
         "подробности — читайте в карточках",
     ]
     if any(w in text_lower for w in _HARD_AD_WORDS):
-        await _db.update_post_status(post_id, "rejected")
+        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] реклама/спам (жёсткое правило)")
         logger.info(f"Post #{post_id} rejected: hard ad keyword matched")
         return
 
     # Tier 2: soft stop — 2+ generic ad words
     ad_matches = [w for w in _config.ad_stop_words if w in text_lower]
     if len(ad_matches) >= 2:  # 2+ ad stop-words = spam
-        await _db.update_post_status(post_id, "rejected")
+        await _db.update_post_status(post_id, "rejected", rewritten_text=f"[REJECT] реклама/спам: {', '.join(ad_matches[:3])}")
         logger.info(f"Post #{post_id} rejected: ad/spam (matched: {', '.join(ad_matches[:3])})")
         return
 
@@ -1192,7 +1235,7 @@ async def process_new_post(post_id: int):
         ]
         has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
         if not has_geo:
-            await _db.update_post_status(post_id, "rejected")
+            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] нет ключевых слов Ижевск/Удмуртия (федеральный канал)")
             logger.info(
                 f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
                 f"in non-local channel @{source}"
@@ -1202,7 +1245,7 @@ async def process_new_post(post_id: int):
         # Secondary AI check for nuanced relevance (only if geo check passed)
         is_relevant = await _rewriter.check_relevance(original_text)
         if not is_relevant:
-            await _db.update_post_status(post_id, "rejected")
+            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: новость не относится к Ижевску/Удмуртии")
             logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
             return
 
@@ -1210,14 +1253,14 @@ async def process_new_post(post_id: int):
     # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
     published_texts = await _db.get_texts_by_status(["published"], hours=12)
     if _is_similar_to_any(original_text, published_texts):
-        await _db.update_post_status(post_id, "rejected")
+        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] дубликат уже опубликованного поста")
         logger.info(f"Post #{post_id} rejected: similar to published post")
         return
 
     # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
     queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
     if _is_similar_to_any(original_text, queued_texts):
-        await _db.update_post_status(post_id, "rejected")
+        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] похожий пост уже в очереди")
         logger.info(f"Post #{post_id} rejected: similar post already in queue")
         return
 
@@ -1232,7 +1275,7 @@ async def process_new_post(post_id: int):
     if not is_local and not is_breaking:
         is_urgent = await _rewriter.check_urgency(original_text)
         if not is_urgent:
-            await _db.update_post_status(post_id, "rejected")
+            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: неважная новость для жителей Ижевска")
             logger.info(f"Post #{post_id} rejected: not important/urgent enough (federal channel @{source})")
             return
 
@@ -1248,7 +1291,7 @@ async def process_new_post(post_id: int):
 
         # Guard: if AI returned a refusal message — reject post immediately
         if _rewriter._is_refusal(rewritten):
-            await _db.update_post_status(post_id, "rejected")
+            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI отказался переписывать")
             logger.warning(f"Post #{post_id} rejected: AI refusal detected in rewritten text")
             return
 
@@ -1262,7 +1305,7 @@ async def process_new_post(post_id: int):
     # (must be done before format_post adds the same footer/hashtags to every post)
     published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=12)
     if _is_similar_to_any(rewritten, published_rewritten):
-        await _db.update_post_status(post_id, "rejected")
+        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] дубликат после рерайта")
         logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
         return
 

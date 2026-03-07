@@ -155,13 +155,19 @@ class Database:
         )
         await self._db.commit()
 
-    async def update_post_status(self, post_id: int, status: str, reviewed_by: int = None):
-        """Update the status of a post."""
+    async def update_post_status(self, post_id: int, status: str, reviewed_by: int = None, rewritten_text: str = None):
+        """Update the status of a post. Optionally save rewritten_text (used to store rejection reason)."""
         if status in ("approved", "rejected"):
-            await self._db.execute(
-                "UPDATE posts SET status = ?, reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?",
-                (status, reviewed_by, post_id),
-            )
+            if rewritten_text is not None:
+                await self._db.execute(
+                    "UPDATE posts SET status = ?, reviewed_at = datetime('now'), reviewed_by = ?, rewritten_text = ? WHERE id = ?",
+                    (status, reviewed_by, rewritten_text, post_id),
+                )
+            else:
+                await self._db.execute(
+                    "UPDATE posts SET status = ?, reviewed_at = datetime('now'), reviewed_by = ? WHERE id = ?",
+                    (status, reviewed_by, post_id),
+                )
         elif status == "published":
             await self._db.execute(
                 "UPDATE posts SET status = ?, published_at = datetime('now') WHERE id = ?",
