@@ -1326,21 +1326,24 @@ async def process_new_post(post_id: int):
             logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
 
     # Step 3b: Find stock photo.
-    # Always search; mandatory if watermark detected (must replace the original).
-    # Fallback to a curated Izhevsk photo if no stock found.
+    # NOTE: Wikimedia CDN is blocked from Beget VPS — use Unsplash Source (free, no key, stable)
+    # Unsplash Source: https://source.unsplash.com/{photo_id}/{width}x{height}
+
+    # Curated Unsplash city/urban fallback photos
     _IZHEVSK_FALLBACK_PHOTOS = [
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Izhevsk_letom.jpg/1280px-Izhevsk_letom.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Izhevsk_city_centre.jpg/1280px-Izhevsk_city_centre.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
+        "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?w=1280&fit=crop",  # city night
+        "https://images.unsplash.com/photo-1486325212027-8081e485255e?w=1280&fit=crop",  # city street
+        "https://images.unsplash.com/photo-1519501025264-65ba15a82390?w=1280&fit=crop",  # urban
+        "https://images.unsplash.com/photo-1444723121867-7a241cacace9?w=1280&fit=crop",  # city view
     ]
 
-    # Curated winter/snow photos of Izhevsk — avoids garbage "tire chains" results
+    # Curated winter/snow Unsplash photos — avoids "tire chains" results
     _IZHEVSK_WINTER_PHOTOS = [
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/6/65/Izhevsk_winter.jpg/1280px-Izhevsk_winter.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Izhevsk_in_winter.jpg/1280px-Izhevsk_in_winter.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/9/9d/Izhevsk_embankment_winter.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Izhevsk_зима.jpg/1280px-Izhevsk_зима.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
+        "https://images.unsplash.com/photo-1491002052546-bf38f186af56?w=1280&fit=crop",  # winter city
+        "https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=1280&fit=crop",  # snow street
+        "https://images.unsplash.com/photo-1418985991508-e47386d96a71?w=1280&fit=crop",  # snowy street
+        "https://images.unsplash.com/photo-1548777123-e216912df7d8?w=1280&fit=crop",  # winter road
+        "https://images.unsplash.com/photo-1611288875785-5c7f8ceee5a5?w=1280&fit=crop",  # snow city
     ]
 
     _WEATHER_KEYWORDS = {
@@ -1359,9 +1362,9 @@ async def process_new_post(post_id: int):
         stock_url = None
 
         if is_weather_post:
-            # Use curated winter Izhevsk photos — always better than stock search for weather
+            # Use curated winter photos — always better than stock search for weather
             stock_url = random.choice(_IZHEVSK_WINTER_PHOTOS)
-            logger.info(f"Post #{post_id}: weather post — using curated winter Izhevsk photo")
+            logger.info(f"Post #{post_id}: weather post — using curated winter photo")
         elif keywords:
             stock_photos = await _media_processor.search_stock_photo(keywords, count=5)
             # AI relevance check — pick first photo that actually matches the news topic
@@ -1376,10 +1379,13 @@ async def process_new_post(post_id: int):
                 logger.info(f"Post #{post_id}: all stock photos failed relevance check — publishing without photo")
 
         if not stock_url and (has_watermark or post["media_type"] != "photo"):
-            # No stock found but we must replace: use a random Izhevsk fallback
-            import random
-            stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
-            logger.info(f"Post #{post_id}: using Izhevsk fallback photo")
+            if not is_breaking:
+                # No stock found, not breaking: use general city fallback
+                stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
+                logger.info(f"Post #{post_id}: using city fallback photo (Unsplash)")
+            else:
+                # Breaking news: publish text-only, no fallback (urgency > aesthetics)
+                logger.info(f"Post #{post_id}: breaking news, no photo — publishing text-only")
 
         if stock_url:
             await _db.update_post_media(post_id, replacement_url=stock_url)
