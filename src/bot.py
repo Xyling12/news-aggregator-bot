@@ -1226,21 +1226,17 @@ async def process_new_post(post_id: int):
     _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
     is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
     is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
-
-<<<<<<< HEAD
-    # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
-=======
-    # Step 0e: Urgency filter — reject routine/unimportant posts
-    # Breaking news always passes (they are by definition important)
-    if not is_breaking:
+    # Step 0e: Urgency filter — only for federal channels, local channels always pass
+    # Local channels (izhevsk_smi, udm_info, etc.) are always relevant by definition
+    # Breaking news always passes too
+    if not is_local and not is_breaking:
         is_urgent = await _rewriter.check_urgency(original_text)
         if not is_urgent:
             await _db.update_post_status(post_id, "rejected")
-            logger.info(f"Post #{post_id} rejected: not important/urgent enough for the channel")
+            logger.info(f"Post #{post_id} rejected: not important/urgent enough (federal channel @{source})")
             return
 
     # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
->>>>>>> 07f1e72 (feat: add urgency filter + fix weather API (Open-Meteo/OpenWeatherMap/Yandex))
     await _db.update_post_status(post_id, "rewriting")
     _ai_hashtags: list = []
     _ai_photo_keywords: list = []
