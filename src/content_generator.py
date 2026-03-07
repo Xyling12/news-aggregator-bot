@@ -389,66 +389,137 @@ class ContentGenerator:
     # ── Rubric Methods ── each returns (text, photo_url) ─────────────────
 
     async def generate_weather(self) -> Tuple[Optional[str], Optional[str]]:
-        """Generate weather post using OpenWeatherMap API."""
+        """Generate weather post using real weather APIs (no AI hallucination).
+
+        Priority:
+          1. Яндекс.Погода API (free 50 req/day, Russian conditions)
+          2. OpenWeatherMap (if OPENWEATHER_API_KEY is set)
+          3. Open-Meteo (free, no key needed)
+          4. Return None — do NOT invent weather via AI.
+        """
+        lat, lon = 56.8526, 53.2114  # Izhevsk coordinates
+
+        # ── 1. Яндекс.Погода (данные уже на русском) ──────────────────────
+        yandex_weather_key = self.config.yandex_weather_api_key
+        if yandex_weather_key:
+            try:
+                # Yandex condition codes → Russian text
+                YANDEX_CONDITIONS = {
+                    "clear": "ясно", "partly-cloudy": "малооблачно",
+                    "cloudy": "облачно с прояснениями", "overcast": "пасмурно",
+                    "drizzle": "морось", "light-rain": "небольшой дождь",
+                    "rain": "дождь", "moderate-rain": "умеренный дождь",
+                    "heavy-rain": "сильный дождь", "continuous-heavy-rain": "очень сильный дождь",
+                    "showers": "ливень", "wet-snow": "дождь со снегом",
+                    "light-snow": "небольшой снег", "snow": "снег",
+                    "snow-showers": "снегопад", "hail": "град",
+                    "thunderstorm": "гроза", "thunderstorm-with-rain": "гроза с дождём",
+                    "thunderstorm-with-hail": "гроза с градом",
+                }
+                url = (
+                    f"https://api.weather.yandex.ru/v2/forecast"
+                    f"?lat={lat}&lon={lon}&lang=ru_RU&limit=1&hours=false&extra=false"
+                )
+                headers = {"X-Yandex-Weather-Key": yandex_weather_key}
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            fact = data["fact"]
+                            condition_code = fact.get("condition", "cloudy")
+                            description = YANDEX_CONDITIONS.get(condition_code, "переменная облачность")
+                            return await self._build_weather_post(
+                                temp=fact["temp"],
+                                feels_like=fact["feels_like"],
+                                description=description,
+                                wind=fact.get("wind_speed", 0),
+                                humidity=fact.get("humidity", 0),
+                                pressure=fact.get("pressure_mm", 760),
+                            )
+                        logger.warning(f"Яндекс.Погода HTTP {resp.status}, trying OpenWeatherMap")
+            except Exception as e:
+                logger.warning(f"Яндекс.Погода failed ({e}), trying OpenWeatherMap")
         api_key = self.config.openweather_api_key
-        if not api_key:
-            logger.warning("OpenWeatherMap API key not set, using AI fallback")
-            text = await self._generate_weather_ai()
-            return await self._generate_with_photo(text)
+        if api_key:
+            try:
+                url = (
+                    f"https://api.openweathermap.org/data/2.5/weather"
+                    f"?lat={lat}&lon={lon}&appid={api_key}&units=metric&lang=ru"
+                )
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return await self._build_weather_post(
+                                temp=round(data["main"]["temp"]),
+                                feels_like=round(data["main"]["feels_like"]),
+                                description=data["weather"][0]["description"],
+                                wind=round(data["wind"]["speed"], 1),
+                                humidity=data["main"]["humidity"],
+                                pressure=round(data["main"]["pressure"] * 0.750062),
+                            )
+                        logger.warning(f"OpenWeatherMap HTTP {resp.status}, falling back to Open-Meteo")
+            except Exception as e:
+                logger.warning(f"OpenWeatherMap failed ({e}), falling back to Open-Meteo")
 
+        # ── Fallback: Open-Meteo (completely free, no API key) ────────────
         try:
-            lat, lon = 56.8526, 53.2114
-            url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={api_key}&units=metric&lang=ru"
-
+            # WMO weather codes → Russian description
+            WMO_CODES = {
+                0: "ясно", 1: "преимущественно ясно", 2: "переменная облачность", 3: "пасмурно",
+                45: "туман", 48: "изморозь", 51: "лёгкая морось", 53: "морось", 55: "сильная морось",
+                61: "лёгкий дождь", 63: "дождь", 65: "сильный дождь",
+                71: "лёгкий снег", 73: "снег", 75: "сильный снег", 77: "снежная крупа",
+                80: "ливень", 81: "ливень", 82: "сильный ливень",
+                85: "снегопад", 86: "сильный снегопад",
+                95: "гроза", 96: "гроза с градом", 99: "сильная гроза с градом",
+            }
+            url = (
+                f"https://api.open-meteo.com/v1/forecast"
+                f"?latitude={lat}&longitude={lon}"
+                f"&current=temperature_2m,apparent_temperature,weather_code,"
+                f"wind_speed_10m,relative_humidity_2m,surface_pressure"
+                f"&wind_speed_unit=ms&timezone=Europe%2FSamara"
+            )
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status != 200:
-                        logger.error(f"OpenWeatherMap returned {resp.status}")
-                        text = await self._generate_weather_ai()
-                        return await self._generate_with_photo(text)
-                    data = await resp.json()
-
-            temp = round(data["main"]["temp"])
-            feels_like = round(data["main"]["feels_like"])
-            description = data["weather"][0]["description"]
-            wind = round(data["wind"]["speed"], 1)
-            humidity = data["main"]["humidity"]
-            pressure = round(data["main"]["pressure"] * 0.750062)
-
-            now = datetime.now()
-            date_str = now.strftime("%d %B").lstrip("0")
-
-            prompt = WEATHER_FORMAT.format(
-                temp=temp, feels_like=feels_like, description=description,
-                wind=wind, humidity=humidity, pressure=pressure, date=date_str,
-            )
-            text = await self._ask_ai(prompt, temperature=0.5)
-            if text:
-                text += "\n\n#погода #ижевск"
-                text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-            return await self._generate_with_photo(text)
-
+                    if resp.status == 200:
+                        data = await resp.json()
+                        cur = data["current"]
+                        wmo = cur.get("weather_code", 0)
+                        description = WMO_CODES.get(wmo, "переменная облачность")
+                        return await self._build_weather_post(
+                            temp=round(cur["temperature_2m"]),
+                            feels_like=round(cur["apparent_temperature"]),
+                            description=description,
+                            wind=round(cur["wind_speed_10m"], 1),
+                            humidity=cur["relative_humidity_2m"],
+                            pressure=round(cur["surface_pressure"] * 0.750062),
+                        )
+                    logger.error(f"Open-Meteo HTTP {resp.status}")
         except Exception as e:
-            logger.error(f"Weather generation failed: {e}")
-            text = await self._generate_weather_ai()
-            return await self._generate_with_photo(text)
+            logger.error(f"Open-Meteo failed: {e}")
 
-    async def _generate_weather_ai(self) -> Optional[str]:
-        """Fallback: generate weather purely via AI."""
+        # ── All APIs failed — do NOT invent weather ───────────────────────
+        logger.error("All weather APIs failed — skipping weather post to avoid fake data")
+        return None, None
+
+    async def _build_weather_post(
+        self, temp: int, feels_like: int, description: str,
+        wind: float, humidity: int, pressure: int,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Build the weather post text from real weather data using AI for natural language."""
         now = datetime.now()
-        month = now.strftime("%B")
-        day = now.day
-        prompt = (
-            f"Напиши типичный прогноз погоды для Ижевска на {day} {month}. "
-            "Основывайся на климатических нормах. "
-            "Эмодзи + 'Ижевск, дата' + 3-4 строки + совет что надеть. "
-            "Пиши как человек, не как бот.\n" + HUMAN_STYLE
+        date_str = now.strftime("%d %B").lstrip("0")
+        prompt = WEATHER_FORMAT.format(
+            temp=temp, feels_like=feels_like, description=description,
+            wind=wind, humidity=humidity, pressure=pressure, date=date_str,
         )
-        text = await self._ask_ai(prompt, temperature=0.6)
+        text = await self._ask_ai(prompt, temperature=0.5)
         if text:
             text += "\n\n#погода #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return text
+        return await self._generate_with_photo(text, hint_keywords=["izhevsk winter city", "russia weather"])
 
     async def generate_history_fact(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate 'This day in history' post."""

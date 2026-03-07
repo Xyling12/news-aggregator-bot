@@ -48,6 +48,9 @@ class Config:
     # Optional: OpenWeatherMap API
     openweather_api_key: str = ""
 
+    # Optional: Yandex Weather API (free 50 req/day, Russian conditions)
+    yandex_weather_api_key: str = ""
+
     # Optional: VK crossposting
     vk_access_token: str = ""
     vk_group_id: str = ""
@@ -123,6 +126,7 @@ class Config:
             yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
             retext_api_key=os.getenv("RETEXT_API_KEY", ""),
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
+            yandex_weather_api_key=os.getenv("YANDEX_WEATHER_API_KEY", ""),
             vk_access_token=os.getenv("VK_ACCESS_TOKEN", ""),
             vk_group_id=os.getenv("VK_GROUP_ID", ""),
             max_bot_token=os.getenv("MAX_BOT_TOKEN", ""),
