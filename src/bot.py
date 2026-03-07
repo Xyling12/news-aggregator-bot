@@ -1227,57 +1227,59 @@ async def process_new_post(post_id: int):
     local_keywords = ["izhevsk", "izh", "udm", "удмурт", "ижевск", "18"]
     is_local = any(kw in source for kw in local_keywords)
 
-    if not is_local:
-        # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
-        _GEO_KEYWORDS = [
-            "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
-            "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
-        ]
-        has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
-        if not has_geo:
-            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] нет ключевых слов Ижевск/Удмуртия (федеральный канал)")
-            logger.info(
-                f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
-                f"in non-local channel @{source}"
-            )
-            return
-
-        # Secondary AI check for nuanced relevance (only if geo check passed)
-        is_relevant = await _rewriter.check_relevance(original_text)
-        if not is_relevant:
-            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: новость не относится к Ижевску/Удмуртии")
-            logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
-            return
-
-    # Step 0c: Deduplication — smart two-tier check
-    # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
-    published_texts = await _db.get_texts_by_status(["published"], hours=12)
-    if _is_similar_to_any(original_text, published_texts):
-        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] дубликат уже опубликованного поста")
-        logger.info(f"Post #{post_id} rejected: similar to published post")
-        return
-
-    # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
-    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
-    if _is_similar_to_any(original_text, queued_texts):
-        await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] похожий пост уже в очереди")
-        logger.info(f"Post #{post_id} rejected: similar post already in queue")
-        return
-
-    # Step 0d: Breaking news detection — auto-publish without moderation
-    # Radar/БПЛА channels always treated as breaking (air-defense alerts, etc.)
+    # Step 0b-pre: Detect breaking news FIRST — before any other filters
+    # Breaking news bypasses deduplication (each source's alert is valuable)
     _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
     is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
     is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
-    # Step 0e: Urgency filter — only for federal channels, local channels always pass
-    # Local channels (izhevsk_smi, udm_info, etc.) are always relevant by definition
-    # Breaking news always passes too
-    if not is_local and not is_breaking:
-        is_urgent = await _rewriter.check_urgency(original_text)
-        if not is_urgent:
-            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: неважная новость для жителей Ижевска")
-            logger.info(f"Post #{post_id} rejected: not important/urgent enough (federal channel @{source})")
+
+    if is_breaking:
+        logger.info(f"Post #{post_id}: ⚡ BREAKING NEWS detected — skipping all filters")
+    else:
+        if not is_local:
+            # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
+            _GEO_KEYWORDS = [
+                "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
+                "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
+            ]
+            has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
+            if not has_geo:
+                await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] нет ключевых слов Ижевск/Удмуртия (федеральный канал)")
+                logger.info(
+                    f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
+                    f"in non-local channel @{source}"
+                )
+                return
+
+            # Secondary AI check for nuanced relevance (only if geo check passed)
+            is_relevant = await _rewriter.check_relevance(original_text)
+            if not is_relevant:
+                await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: новость не относится к Ижевску/Удмуртии")
+                logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
+                return
+
+        # Step 0c: Deduplication — smart two-tier check (skipped for breaking news)
+        # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
+        published_texts = await _db.get_texts_by_status(["published"], hours=12)
+        if _is_similar_to_any(original_text, published_texts):
+            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] дубликат уже опубликованного поста")
+            logger.info(f"Post #{post_id} rejected: similar to published post")
             return
+
+        # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
+        queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
+        if _is_similar_to_any(original_text, queued_texts):
+            await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] похожий пост уже в очереди")
+            logger.info(f"Post #{post_id} rejected: similar post already in queue")
+            return
+
+        # Step 0d: Urgency filter — only for federal non-breaking channels
+        if not is_local:
+            is_urgent = await _rewriter.check_urgency(original_text)
+            if not is_urgent:
+                await _db.update_post_status(post_id, "rejected", rewritten_text="[REJECT] AI: неважная новость для жителей Ижевска")
+                logger.info(f"Post #{post_id} rejected: not important/urgent enough (federal channel @{source})")
+                return
 
     # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
     await _db.update_post_status(post_id, "rewriting")
