@@ -30,6 +30,7 @@ class Config:
 
     # Google Gemini API
     gemini_api_key: str = ""
+    gemini_model_names: List[str] = field(default_factory=list)
 
     # Source channels to monitor
     source_channels: List[str] = field(default_factory=list)
@@ -41,6 +42,10 @@ class Config:
     # Optional: YandexGPT API
     yandex_api_key: str = ""
     yandex_folder_id: str = ""
+
+    # Optional: Groq API
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
 
     # Optional: ReText.AI API
     retext_api_key: str = ""
@@ -116,6 +121,9 @@ class Config:
         source_channels_raw = os.getenv("SOURCE_CHANNELS", "")
         source_channels = [x.strip() for x in source_channels_raw.split(",") if x.strip()]
 
+        gemini_model_names_raw = os.getenv("GEMINI_MODEL_NAMES", "")
+        gemini_model_names = [x.strip() for x in gemini_model_names_raw.split(",") if x.strip()]
+
         return cls(
             api_id=int(os.getenv("TELEGRAM_API_ID", "0")),
             api_hash=os.getenv("TELEGRAM_API_HASH", ""),
@@ -123,11 +131,14 @@ class Config:
             target_channel=os.getenv("TARGET_CHANNEL", ""),
             admin_ids=admin_ids,
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            gemini_model_names=gemini_model_names,
             source_channels=source_channels,
             pixabay_api_key=os.getenv("PIXABAY_API_KEY", ""),
             unsplash_access_key=os.getenv("UNSPLASH_ACCESS_KEY", ""),
             yandex_api_key=os.getenv("YANDEX_API_KEY", ""),
             yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
+            groq_api_key=os.getenv("GROQ_API_KEY", ""),
+            groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             retext_api_key=os.getenv("RETEXT_API_KEY", ""),
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
             yandex_weather_api_key=os.getenv("YANDEX_WEATHER_API_KEY", ""),

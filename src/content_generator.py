@@ -365,7 +365,13 @@ class ContentGenerator:
         try:
             photos = await self._media.search_stock_photo(keywords, count=5)
             if photos:
-                return random.choice(photos[:5])["url"]
+                for candidate in photos[:5]:
+                    url = candidate["url"]
+                    if not self._rewriter:
+                        return url
+                    is_relevant = await self._rewriter.check_photo_relevance_safe(text, url)
+                    if is_relevant:
+                        return url
         except Exception as e:
             logger.error(f"Photo search failed ({keywords}): {e}")
 
@@ -375,7 +381,13 @@ class ContentGenerator:
                 fallback = [hint_keywords[0], "russia"]
                 photos = await self._media.search_stock_photo(fallback, count=5)
                 if photos:
-                    return random.choice(photos[:5])["url"]
+                    for candidate in photos[:5]:
+                        url = candidate["url"]
+                        if not self._rewriter:
+                            return url
+                        is_relevant = await self._rewriter.check_photo_relevance_safe(text, url)
+                        if is_relevant:
+                            return url
             except Exception:
                 pass
 

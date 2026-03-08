@@ -15,6 +15,8 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils import clean_text, word_overlap, is_similar_to_any, detect_rubric, format_post
+from src.bot import _has_local_geo, _looks_federal_news
+from src.ai_rewriter import _parse_binary_answer
 from src.config import Config
 from src.vk_publisher import VKPublisher
 
@@ -235,6 +237,66 @@ class TestConfig(unittest.TestCase):
     def test_breaking_keywords_not_empty(self):
         cfg = Config()
         self.assertGreater(len(cfg.breaking_keywords), 0)
+
+    def test_from_env_parses_gemini_model_names(self):
+        original = os.environ.get("GEMINI_MODEL_NAMES")
+        try:
+            os.environ["GEMINI_MODEL_NAMES"] = "gemini-2.5-flash, gemini-2.5-pro ,gemini-2.0-flash"
+            cfg = Config.from_env()
+            self.assertEqual(
+                cfg.gemini_model_names,
+                ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+            )
+        finally:
+            if original is None:
+                os.environ.pop("GEMINI_MODEL_NAMES", None)
+            else:
+                os.environ["GEMINI_MODEL_NAMES"] = original
+
+    def test_from_env_parses_groq_settings(self):
+        original_key = os.environ.get("GROQ_API_KEY")
+        original_model = os.environ.get("GROQ_MODEL")
+        try:
+            os.environ["GROQ_API_KEY"] = "test_groq_key"
+            os.environ["GROQ_MODEL"] = "llama-3.1-8b-instant"
+            cfg = Config.from_env()
+            self.assertEqual(cfg.groq_api_key, "test_groq_key")
+            self.assertEqual(cfg.groq_model, "llama-3.1-8b-instant")
+        finally:
+            if original_key is None:
+                os.environ.pop("GROQ_API_KEY", None)
+            else:
+                os.environ["GROQ_API_KEY"] = original_key
+
+            if original_model is None:
+                os.environ.pop("GROQ_MODEL", None)
+            else:
+                os.environ["GROQ_MODEL"] = original_model
+
+
+class TestRegionFilters(unittest.TestCase):
+
+    def test_local_geo_detected_in_plain_text(self):
+        self.assertTrue(_has_local_geo("В Ижевске откроют новый парк"))
+
+    def test_hashtag_only_geo_does_not_count(self):
+        text = "Сочи и близлежащие\nОтбой опасности по БПЛА\n#Ижевск #Удмуртия"
+        self.assertFalse(_has_local_geo(text))
+
+    def test_federal_news_detected_without_geo(self):
+        self.assertTrue(_looks_federal_news("Госдума приняла закон о повышении пенсий"))
+
+
+class TestBinaryAnswerParsing(unittest.TestCase):
+
+    def test_parse_yes(self):
+        self.assertTrue(_parse_binary_answer("YES"))
+
+    def test_parse_no(self):
+        self.assertFalse(_parse_binary_answer("NO"))
+
+    def test_parse_russian_yes(self):
+        self.assertTrue(_parse_binary_answer("Да"))
 
 
 # ─── vk_publisher ─────────────────────────────────────────────────────────────

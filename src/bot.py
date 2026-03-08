@@ -72,6 +72,55 @@ _bot: Optional[Bot] = None
 # Rate limiting: max 3 concurrent AI calls to avoid Gemini 429 errors
 _ai_semaphore = asyncio.Semaphore(3)
 
+LOCAL_GEO_KEYWORDS = [
+    "удмурт",
+    "ижевск",
+    "глазов",
+    "сарапул",
+    "воткинск",
+    "можга",
+    "камбарк",
+    "балезин",
+    "завьялов",
+    "удмуртск",
+]
+
+FEDERAL_NEWS_KEYWORDS = [
+    "федеральн",
+    "госдум",
+    "государственн",
+    "правительств",
+    "минфин",
+    "центробанк",
+    "центральн банк",
+    "ключев",
+    "пенси",
+    "налог",
+    "пособи",
+    "мрот",
+    "жкх тариф",
+    "тариф",
+    "инфляц",
+    "ставк",
+]
+
+RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
+
+
+def _normalize_geo_text(text: str) -> str:
+    """Remove hashtag-only lines so region checks use the main body."""
+    return re.sub(r"(?m)^\s*#.*$", "", text.lower()).strip()
+
+
+def _has_local_geo(text: str) -> bool:
+    normalized = _normalize_geo_text(text)
+    return any(keyword in normalized for keyword in LOCAL_GEO_KEYWORDS)
+
+
+def _looks_federal_news(text: str) -> bool:
+    normalized = _normalize_geo_text(text)
+    return any(keyword in normalized for keyword in FEDERAL_NEWS_KEYWORDS)
+
 
 def is_admin(user_id: int) -> bool:
     """Check if user is admin."""
@@ -1198,16 +1247,17 @@ async def process_new_post(post_id: int):
         any(kw in source for kw in _LOCAL_SOURCE_KEYWORDS)
         or any(trusted in source for trusted in _TRUSTED_LOCAL_CHANNELS)
     )
+    is_radar_source = any(m in source for m in RADAR_SOURCE_MARKERS)
+    has_geo = _has_local_geo(original_text)
+    looks_federal = _looks_federal_news(original_text)
+
+    if not has_geo and not looks_federal and not is_radar_source:
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: no local geo markers in text")
+        return
 
     if not is_local:
-        # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
-        _GEO_KEYWORDS = [
-            "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
-            "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
-            "республика удмуртия", "столица удмуртии",
-        ]
-        has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
-        if not has_geo:
+        if not has_geo and not looks_federal:
             await _db.update_post_status(post_id, "rejected")
             logger.info(
                 f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
@@ -1239,8 +1289,6 @@ async def process_new_post(post_id: int):
 
     # Step 0d: Breaking news detection — auto-publish without moderation
     # Radar/БПЛА channels always treated as breaking (air-defense alerts, etc.)
-    _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
-    is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
     is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
 
     # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
@@ -1304,7 +1352,7 @@ async def process_new_post(post_id: int):
             # AI relevance check — pick first photo that actually matches the news topic
             for candidate in stock_photos[:3]:
                 url = candidate["url"]
-                is_relevant = await _rewriter.check_photo_relevance(original_text, url)
+                is_relevant = await _rewriter.check_photo_relevance_safe(original_text, url)
                 if is_relevant:
                     stock_url = url
                     logger.info(f"Post #{post_id}: stock photo approved for '{' '.join(keywords)}'")

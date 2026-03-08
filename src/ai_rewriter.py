@@ -19,6 +19,39 @@ from src.config import Config
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_GEMINI_MODEL_NAMES = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+]
+
+
+def _parse_binary_answer(answer: str) -> Optional[bool]:
+    """Parse a strict YES/NO answer from a model response."""
+    if not answer:
+        return None
+
+    normalized = answer.strip().lower()
+    for char in ".!?:":
+        normalized = normalized.replace(char, " ")
+    tokens = [token for token in normalized.split() if token]
+    if not tokens:
+        return None
+
+    yes_tokens = {"yes", "да", "true"}
+    no_tokens = {"no", "нет", "false"}
+    if tokens[0] in yes_tokens:
+        return True
+    if tokens[0] in no_tokens:
+        return False
+    if any(token in yes_tokens for token in tokens):
+        return True
+    if any(token in no_tokens for token in tokens):
+        return False
+    return None
+
 # Prompt template for news rewriting — premium Telegram channel style
 REWRITE_PROMPT = """Ты — главный редактор популярного новостного Telegram-канала "Ижевск Сегодня".
 
@@ -86,58 +119,42 @@ else:
     SAFETY_SETTINGS = None
 
 # Prompt to check if news is relevant to Izhevsk/Udmurtia readers
-RELEVANCE_PROMPT = """Ты — редактор регионального новостного канала «Ижевск Сегодня» (Удмуртия).
+RELEVANCE_PROMPT = """You decide whether a news item fits a regional channel about Izhevsk and Udmurtia.
 
-Публикуй то, что касается жителей Ижевска и Удмуртии.
+Answer YES only if at least one statement is true:
+- The text directly mentions Izhevsk, Udmurtia, the Udmurt Republic, or a city in Udmurtia.
+- It is clearly nationwide news that directly affects residents in Izhevsk too, such as pensions, taxes, tariffs, benefits, or key-rate decisions.
+- It is a rating, research, or major story where Izhevsk or Udmurtia is explicitly involved.
 
-Новость НУЖНА (ответь ДА) если:
-- Прямо упоминает Ижевск, Удмуртию, Удмуртскую Республику
-- Упоминает города Удмуртии: Сарапул, Воткинск, Глазов, Можга, Сарапул, Ижевск
-- Федеральный закон/указ с ПРЯМЫМ влиянием на ВСЕХ россиян (пенсии, налоги, льготы, единые тарифы)
-- Общероссийская экономика: курс рубля, ключевая ставка, федеральная инфляция
-- Сборная России на крупных международных турнирах
-- Рейтинг или исследование, в котором фигурирует Ижевск/Удмуртия
+Answer NO if any statement is true:
+- The story is about another region with no explicit connection to Izhevsk or Udmurtia.
+- It is a local emergency, drone alert, accident, fire, utility issue, or appointment in another region.
+- The text has no explicit local connection and is not clearly nationwide.
 
-Новость НЕ НУЖНА (ответь НЕТ) если:
-- Происшествие, авария, пожар, криминал в ДРУГОМ регионе (не Удмуртия)
-- Военные тревоги, обстрелы, БПЛА — если регион НЕ Удмуртия
-- Меры безопасности в конкретном ЧУЖОМ регионе (Саратов, Москва, Белгород и т.д.)
-- Ремонт, стройка, ЖКХ в ДРУГОМ регионе
-- Местные назначения, выборы, мероприятия в ДРУГОМ регионе
-- Новость не содержит слово Удмуртия/Ижевск/город Удмуртии и не является федеральным законом
+If unsure, answer NO.
+Reply with exactly one word: YES or NO.
 
-Правило: если сомневаешься — ответь НЕТ.
-
-Ответь ТОЛЬКО одним словом: ДА или НЕТ.
-
-Новость: {text}"""
+News text:
+{text}"""
 
 
 # Prompt to check if a news post is genuinely important/urgent for readers
-URGENCY_PROMPT = """Ты — редактор новостного канала «Ижевск Сегодня».
+URGENCY_PROMPT = """You decide whether a news item is important enough to publish in a regional news channel.
 
-Решай: ВАЖНА ли эта новость для жителей Ижевска? Стоит ли её публиковать?
+Answer YES if it is genuinely important, urgent, or useful:
+- emergency, accident, fire, court case, arrest, outage, road closure, public safety warning
+- a decision that clearly affects money, transport, utilities, schools, hospitals, or daily life
+- a major local opening, closure, investigation, event, rating, or research result
 
-ПУБЛИКУЙ (ответь ДА) если:
-- Экстренное событие: пожар, ДТП, авария, взрыв, ЧП, задержание, суд, уголовное дело
-- Решение власти, прямо влияющее на жизнь горожан (тарифы, закрытие дороги, маршрут)
-- Значимое изменение: новый объект, закрытие школы/больницы, крупное мероприятие
-- Экономика: рост цен, изменение зарплат, банк, налоги
-- Срочная информация: эвакуация, отключение воды/света/тепла
-- Рейтинг, исследование, достижение с участием Ижевска или Удмуртии
-- Уголовные дела, суды, приговоры над жителями Удмуртии
-- Акции, протесты, общественные события
+Answer NO if it is mostly noise:
+- press release, promotion, greeting, vague announcement, opinion without facts
+- routine meeting or ceremonial event without concrete consequences
+- recycled old news or trivial filler
 
-НЕ ПУБЛИКУЙ (ответь НЕТ) если:
-- Пресс-релиз, реклама, поздравление, анонс концерта без значимости
-- Мнение или комментарий без фактов
-- Рутинная активность чиновников (встреча, совещание без результата)
-- Перепечатка старой новости или общеизвестного факта
-- Криминал/ЧП в другом регионе без связи с Ижевском
+Reply with exactly one word: YES or NO.
 
-Ответь ТОЛЬКО одним словом: ДА или НЕТ.
-
-Новость: {text}"""
+News text:
+{text}"""
 
 
 # Phrases that indicate AI refused to process the text (safety/policy filters)
@@ -196,12 +213,7 @@ class AIRewriter:
                 genai.configure(api_key=self.config.gemini_api_key)
                 # Multiple models — each has separate free tier quota
                 # Updated March 2026: gemini-1.5-flash is deprecated (404)
-                model_names = [
-                    "gemini-2.0-flash",           # Primary: fast, free tier
-                    "gemini-2.0-flash-lite",       # Fallback: lighter version
-                    "gemini-2.5-pro-exp-03-25",    # Fallback: experimental but available
-                    "gemini-1.5-flash-latest",     # Last resort: 1.5 via latest alias
-                ]
+                model_names = self._resolve_gemini_model_names()
                 for name in model_names:
                     try:
                         model = genai.GenerativeModel(name)
@@ -219,6 +231,41 @@ class AIRewriter:
                 logger.error(f"Failed to configure Gemini API: {e}")
         else:
             logger.error("⚠️ GEMINI_API_KEY is NOT SET! AI rewrite will NOT work!")
+
+    def _resolve_gemini_model_names(self) -> list[str]:
+        """Return configured Gemini model ids, filtered against ListModels when possible."""
+        requested = self.config.gemini_model_names or DEFAULT_GEMINI_MODEL_NAMES
+
+        deduped: list[str] = []
+        seen = set()
+        for name in requested:
+            if name and name not in seen:
+                deduped.append(name)
+                seen.add(name)
+
+        try:
+            available = set()
+            for model in genai.list_models():
+                methods = getattr(model, "supported_generation_methods", []) or []
+                if "generateContent" not in methods:
+                    continue
+                model_name = getattr(model, "name", "")
+                if model_name.startswith("models/"):
+                    model_name = model_name.split("/", 1)[1]
+                if model_name:
+                    available.add(model_name)
+
+            matched = [name for name in deduped if name in available]
+            missing = [name for name in deduped if name not in available]
+            for name in missing:
+                logger.warning(f"Gemini model not available for generateContent, skipping: {name}")
+            if matched:
+                return matched
+            logger.warning("No configured Gemini models matched ListModels; using requested order without validation")
+        except Exception as e:
+            logger.warning(f"Gemini model validation via list_models failed: {e}")
+
+        return deduped
 
     async def check_relevance(self, text: str) -> bool:
         """
@@ -244,15 +291,17 @@ class AIRewriter:
             )
 
             if response and response.text:
-                answer = response.text.strip().upper()
-                is_relevant = "ДА" in answer
+                is_relevant = _parse_binary_answer(response.text)
+                if is_relevant is None:
+                    logger.warning(f"Relevance check returned ambiguous answer: {response.text!r}")
+                    return False
                 logger.info(f"Relevance check: {'✅ general' if is_relevant else '❌ regional'}")
                 return is_relevant
 
         except Exception as e:
             logger.error(f"Relevance check failed: {e}")
 
-        return True  # On error, let it through
+        return False  # On error, be conservative
 
     async def check_urgency(self, text: str) -> bool:
         """
@@ -277,28 +326,36 @@ class AIRewriter:
             )
 
             if response and response.text:
-                answer = response.text.strip().upper()
-                is_urgent = "ДА" in answer
+                is_urgent = _parse_binary_answer(response.text)
+                if is_urgent is None:
+                    logger.warning(f"Urgency check returned ambiguous answer: {response.text!r}")
+                    return False
                 logger.info(f"Urgency check: {'✅ important' if is_urgent else '❌ skipped (not urgent)'}")
                 return is_urgent
 
         except Exception as e:
             logger.error(f"Urgency check failed: {e}")
 
-        return True  # On error, let it through
+        return False  # On error, be conservative
 
     async def rewrite(self, original_text: str) -> Tuple[Optional[str], str]:
         """
         Rewrite text using AI.
         
         Returns:
-            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'yandexgpt' | 'retext' | 'error')
+            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'groq' | 'yandexgpt' | 'retext' | 'error')
         """
         # Try Gemini first
         if self._gemini_model:
             result = await self._rewrite_with_gemini(original_text)
             if result:
                 return result, "gemini"
+
+        # Fallback to Groq
+        if self.config.groq_api_key:
+            result = await self._rewrite_with_groq(original_text)
+            if result:
+                return result, "groq"
 
         # Fallback to YandexGPT
         if self.config.yandex_api_key and self.config.yandex_folder_id:
@@ -444,7 +501,7 @@ class AIRewriter:
         return rewritten, engine, hashtags, photo_keywords
 
     async def ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
-        """Generic AI text generation with Gemini→YandexGPT fallback.
+        """Generic AI text generation with Gemini→Groq→YandexGPT fallback.
 
         Used by ContentGenerator for rubric posts (weather, recipe, facts, etc.).
         """
@@ -481,6 +538,17 @@ class AIRewriter:
                         logger.warning(f"ask_ai: {_name} error: {gem_err}")
             except Exception as e:
                 logger.warning(f"ask_ai: Gemini failed: {e}")
+
+        # Fallback to Groq
+        if self.config.groq_api_key:
+            text = await self._groq_chat(
+                prompt=prompt,
+                temperature=temperature,
+                max_tokens=2048,
+            )
+            if text and len(text) > 20:
+                logger.info(f"ask_ai: Groq fallback OK ({len(text)} chars)")
+                return text
 
         # Fallback to YandexGPT
         if self.config.yandex_api_key and self.config.yandex_folder_id:
@@ -662,6 +730,62 @@ class AIRewriter:
             logger.error(f"YandexGPT rewrite failed: {e}")
 
         return None
+
+    async def _groq_chat(self, prompt: str, temperature: float, max_tokens: int) -> Optional[str]:
+        """Generic Groq chat completion helper (OpenAI-compatible endpoint)."""
+        if not self.config.groq_api_key:
+            return None
+
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.groq_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.config.groq_model,
+            "messages": [
+                {"role": "system", "content": "You are a concise Russian news editor for a Telegram channel."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        choices = data.get("choices", [])
+                        if not choices:
+                            return None
+                        message = choices[0].get("message", {}) or {}
+                        content = (message.get("content") or "").strip()
+                        return content or None
+                    error_text = await resp.text()
+                    logger.warning(f"Groq returned {resp.status}: {error_text[:200]}")
+        except Exception as e:
+            logger.warning(f"Groq request failed: {e}")
+
+        return None
+
+    async def _rewrite_with_groq(self, text: str) -> Optional[str]:
+        """Rewrite text using Groq API."""
+        prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+        rewritten = await self._groq_chat(prompt=prompt, temperature=0.9, max_tokens=2048)
+        if not rewritten:
+            return None
+        if self._is_refusal(rewritten):
+            logger.warning(f"Groq: refusal detected: {rewritten[:80]}")
+            return None
+        if len(rewritten) <= 50 or rewritten == text:
+            logger.warning("Groq: too short or identical")
+            return None
+
+        uniqueness = self.calculate_uniqueness(text, rewritten)
+        logger.info(f"Groq: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
+        return rewritten
 
     async def _rewrite_with_retext(self, text: str) -> Optional[str]:
         """Rewrite text using ReText.AI API (fallback)."""
@@ -989,6 +1113,58 @@ class AIRewriter:
 
         return True  # On any error → accept photo to avoid blocking publication
 
+
+    async def check_photo_relevance_safe(self, news_text: str, photo_url: str) -> bool:
+        """Safer photo relevance check using an ASCII-only prompt and strict parsing."""
+        if not self._gemini_model:
+            return False
+
+        try:
+            from io import BytesIO
+            import PIL.Image
+
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(photo_url) as resp:
+                    if resp.status != 200:
+                        return False
+                    image_bytes = await resp.read()
+
+            img = PIL.Image.open(BytesIO(image_bytes))
+            prompt = (
+                "Decide whether this photo is relevant for the news item.\n\n"
+                f"News text: {news_text[:300]}\n\n"
+                "Answer NO if the image is about a clearly different topic or is just a technical object shot that "
+                "would look wrong for a normal news post.\n"
+                "Answer YES if it is at least reasonably close to the topic or mood.\n\n"
+                "Reply with exactly one word: YES or NO."
+            )
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._gemini_model.generate_content(
+                    [prompt, img],
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.0,
+                        max_output_tokens=5,
+                    ),
+                ),
+            )
+
+            if response and response.text:
+                parsed = _parse_binary_answer(response.text)
+                if parsed is None:
+                    logger.warning(f"Photo relevance returned ambiguous answer: {response.text!r}")
+                    return False
+                return parsed
+
+        except ImportError:
+            logger.warning("PIL not available for photo relevance check")
+        except Exception as e:
+            logger.error(f"Safe photo relevance check failed: {e}")
+
+        return False
 
     @staticmethod
     def _extract_keywords_fallback(text: str) -> list[str]:
