@@ -107,6 +107,29 @@ FEDERAL_NEWS_KEYWORDS = [
 RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
 
 
+NON_LOCAL_REGION_KEYWORDS = [
+    # Explicit non-local cities/regions that should not pass as Izhevsk-only updates.
+    "сочи",
+    "краснодар",
+    "краснодарск",
+    "адлер",
+    "кубан",
+    "анап",
+    "геленджик",
+    "новороссийск",
+    "ростов",
+    "белгород",
+    "курск",
+    "воронеж",
+    "брянск",
+    "твер",
+    "москва",
+    "санкт-петербург",
+    "петербург",
+    "спб",
+]
+
+
 def _normalize_geo_text(text: str) -> str:
     """Remove hashtag-only lines so region checks use the main body."""
     return re.sub(r"(?m)^\s*#.*$", "", text.lower()).strip()
@@ -120,6 +143,28 @@ def _has_local_geo(text: str) -> bool:
 def _looks_federal_news(text: str) -> bool:
     normalized = _normalize_geo_text(text)
     return any(keyword in normalized for keyword in FEDERAL_NEWS_KEYWORDS)
+
+
+def _has_non_local_geo(text: str) -> bool:
+    normalized = _normalize_geo_text(text)
+    return any(keyword in normalized for keyword in NON_LOCAL_REGION_KEYWORDS)
+
+
+def _should_reject_by_geo(
+    *,
+    is_local_source: bool,
+    has_local_geo: bool,
+    looks_federal: bool,
+    has_non_local_geo: bool,
+) -> bool:
+    """Geo gate used before rewrite/publish."""
+    if has_local_geo or looks_federal:
+        return False
+    if not is_local_source:
+        return True
+    # Local sources are allowed without explicit geo markers,
+    # except when text clearly points to another region.
+    return has_non_local_geo
 
 
 def _is_breaking_candidate(
@@ -1264,21 +1309,22 @@ async def process_new_post(post_id: int):
     is_radar_source = any(m in source for m in RADAR_SOURCE_MARKERS)
     has_geo = _has_local_geo(original_text)
     looks_federal = _looks_federal_news(original_text)
+    has_non_local_geo = _has_non_local_geo(original_text)
 
-    if not has_geo and not looks_federal:
+    if _should_reject_by_geo(
+        is_local_source=is_local,
+        has_local_geo=has_geo,
+        looks_federal=looks_federal,
+        has_non_local_geo=has_non_local_geo,
+    ):
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: no local geo markers in text")
+        if is_local and has_non_local_geo:
+            logger.info(f"Post #{post_id} rejected: local source but non-local geo markers in text")
+        else:
+            logger.info(f"Post #{post_id} rejected: no local geo markers in text")
         return
 
     if not is_local:
-        if not has_geo and not looks_federal:
-            await _db.update_post_status(post_id, "rejected")
-            logger.info(
-                f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
-                f"in non-local channel @{source}"
-            )
-            return
-
         # Secondary AI check for nuanced relevance (only if geo check passed)
         is_relevant = await _rewriter.check_relevance(original_text)
         if not is_relevant:

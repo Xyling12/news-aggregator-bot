@@ -15,7 +15,13 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils import clean_text, word_overlap, is_similar_to_any, detect_rubric, format_post
-from src.bot import _has_local_geo, _looks_federal_news, _is_breaking_candidate
+from src.bot import (
+    _has_local_geo,
+    _looks_federal_news,
+    _is_breaking_candidate,
+    _has_non_local_geo,
+    _should_reject_by_geo,
+)
 from src.ai_rewriter import _parse_binary_answer
 from src.config import Config
 from src.vk_publisher import VKPublisher
@@ -285,6 +291,42 @@ class TestRegionFilters(unittest.TestCase):
 
     def test_federal_news_detected_without_geo(self):
         self.assertTrue(_looks_federal_news("Госдума приняла закон о повышении пенсий"))
+
+
+class TestGeoGate(unittest.TestCase):
+
+    def test_non_local_geo_detected(self):
+        self.assertTrue(_has_non_local_geo("Сочи и Краснодарский край: отбой опасности"))
+
+    def test_non_local_source_without_geo_is_rejected(self):
+        self.assertTrue(
+            _should_reject_by_geo(
+                is_local_source=False,
+                has_local_geo=False,
+                looks_federal=False,
+                has_non_local_geo=False,
+            )
+        )
+
+    def test_local_source_without_geo_and_without_foreign_marker_is_allowed(self):
+        self.assertFalse(
+            _should_reject_by_geo(
+                is_local_source=True,
+                has_local_geo=False,
+                looks_federal=False,
+                has_non_local_geo=False,
+            )
+        )
+
+    def test_local_source_with_foreign_marker_is_rejected(self):
+        self.assertTrue(
+            _should_reject_by_geo(
+                is_local_source=True,
+                has_local_geo=False,
+                looks_federal=False,
+                has_non_local_geo=True,
+            )
+        )
 
 
 class TestBreakingGate(unittest.TestCase):
