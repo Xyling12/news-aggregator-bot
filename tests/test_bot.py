@@ -15,7 +15,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils import clean_text, word_overlap, is_similar_to_any, detect_rubric, format_post
-from src.bot import _has_local_geo, _looks_federal_news
+from src.bot import _has_local_geo, _looks_federal_news, _is_breaking_candidate
 from src.ai_rewriter import _parse_binary_answer
 from src.config import Config
 from src.vk_publisher import VKPublisher
@@ -285,6 +285,31 @@ class TestRegionFilters(unittest.TestCase):
 
     def test_federal_news_detected_without_geo(self):
         self.assertTrue(_looks_federal_news("Госдума приняла закон о повышении пенсий"))
+
+
+class TestBreakingGate(unittest.TestCase):
+
+    def test_radar_without_local_geo_is_not_breaking(self):
+        text = "Сочи и близлежащие\nОтбой опасности по БПЛА"
+        self.assertFalse(
+            _is_breaking_candidate(
+                text,
+                is_radar_source=True,
+                has_geo=False,
+                breaking_keywords=["бпла", "опасность"],
+            )
+        )
+
+    def test_radar_with_local_geo_is_breaking(self):
+        text = "В Удмуртии объявлена опасность БПЛА"
+        self.assertTrue(
+            _is_breaking_candidate(
+                text,
+                is_radar_source=True,
+                has_geo=True,
+                breaking_keywords=["бпла", "опасность"],
+            )
+        )
 
 
 class TestBinaryAnswerParsing(unittest.TestCase):

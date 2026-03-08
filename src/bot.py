@@ -122,6 +122,20 @@ def _looks_federal_news(text: str) -> bool:
     return any(keyword in normalized for keyword in FEDERAL_NEWS_KEYWORDS)
 
 
+def _is_breaking_candidate(
+    text: str,
+    *,
+    is_radar_source: bool,
+    has_geo: bool,
+    breaking_keywords: list[str],
+) -> bool:
+    """Return True only for local breaking posts."""
+    text_lower = text.lower()
+    return (is_radar_source and has_geo) or (
+        has_geo and any(kw in text_lower for kw in breaking_keywords)
+    )
+
+
 def is_admin(user_id: int) -> bool:
     """Check if user is admin."""
     return _config and user_id in _config.admin_ids
@@ -1251,7 +1265,7 @@ async def process_new_post(post_id: int):
     has_geo = _has_local_geo(original_text)
     looks_federal = _looks_federal_news(original_text)
 
-    if not has_geo and not looks_federal and not is_radar_source:
+    if not has_geo and not looks_federal:
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: no local geo markers in text")
         return
@@ -1287,9 +1301,14 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: similar post already in queue")
         return
 
-    # Step 0d: Breaking news detection — auto-publish without moderation
-    # Radar/БПЛА channels always treated as breaking (air-defense alerts, etc.)
-    is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
+    # Step 0d: Breaking news detection — auto-publish without moderation.
+    # Radar source alone is not enough: breaking mode is only for posts with local geo markers.
+    is_breaking = _is_breaking_candidate(
+        original_text,
+        is_radar_source=is_radar_source,
+        has_geo=has_geo,
+        breaking_keywords=_config.breaking_keywords,
+    )
 
     # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
     await _db.update_post_status(post_id, "rewriting")
