@@ -37,6 +37,7 @@ from src.utils import (
     clean_text,
     word_overlap,
     is_similar_to_any,
+    find_similar_candidate,
     detect_rubric,
     format_post,
     RUBRIC_MAP,
@@ -1043,6 +1044,22 @@ def _is_similar_to_any(text: str, candidates: list) -> bool:
     return is_similar_to_any(text, candidates, _rewriter)
 
 
+def _find_similar_match(text: str, candidates: list, *, queued: bool = False):
+    """Return duplicate details for logging and threshold tuning."""
+    if queued:
+        return find_similar_candidate(
+            text,
+            candidates,
+            _rewriter,
+            similarity_threshold=0.83,
+            overlap_threshold=0.58,
+            require_both=True,
+            hard_similarity_threshold=0.96,
+            hard_overlap_threshold=0.86,
+        )
+    return find_similar_candidate(text, candidates, _rewriter)
+
+
 async def _send_review_post(chat_id: int, post: dict):
     """Send a post for admin review with moderation buttons."""
     original = _escape_html(_truncate(post["original_text"], 300))
@@ -1335,16 +1352,24 @@ async def process_new_post(post_id: int):
     # Step 0c: Deduplication — smart two-tier check
     # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
     published_texts = await _db.get_texts_by_status(["published"], hours=12)
-    if _is_similar_to_any(original_text, published_texts):
+    published_match = _find_similar_match(original_text, published_texts)
+    if published_match:
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: similar to published post")
+        logger.info(
+            f"Post #{post_id} rejected: similar to published post "
+            f"(similarity={published_match['similarity']:.2f}, overlap={published_match['overlap']:.2f})"
+        )
         return
 
     # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
-    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
-    if _is_similar_to_any(original_text, queued_texts):
+    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=12)
+    queued_match = _find_similar_match(original_text, queued_texts, queued=True)
+    if queued_match:
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: similar post already in queue")
+        logger.info(
+            f"Post #{post_id} rejected: similar post already in queue "
+            f"(similarity={queued_match['similarity']:.2f}, overlap={queued_match['overlap']:.2f})"
+        )
         return
 
     # Step 0d: Breaking news detection — auto-publish without moderation.
@@ -1381,9 +1406,13 @@ async def process_new_post(post_id: int):
     # Step 2: Deduplicate by REWRITTEN text BEFORE formatting
     # (must be done before format_post adds the same footer/hashtags to every post)
     published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=12)
-    if _is_similar_to_any(rewritten, published_rewritten):
+    rewritten_match = _find_similar_match(rewritten, published_rewritten)
+    if rewritten_match:
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
+        logger.info(
+            f"Post #{post_id} rejected: rewritten text too similar to recently published post "
+            f"(similarity={rewritten_match['similarity']:.2f}, overlap={rewritten_match['overlap']:.2f})"
+        )
         return
 
     # Step 2.5: Format post (hashtags already from rewrite_full)

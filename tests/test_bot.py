@@ -14,7 +14,7 @@ import yaml
 # Добавляем корень проекта в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils import clean_text, word_overlap, is_similar_to_any, detect_rubric, format_post
+from src.utils import clean_text, word_overlap, is_similar_to_any, find_similar_candidate, detect_rubric, format_post
 from src.bot import (
     _has_local_geo,
     _looks_federal_news,
@@ -158,6 +158,81 @@ class TestIsSimilarToAny(unittest.TestCase):
 
 
 # ─── utils: detect_rubric ─────────────────────────────────────────────────────
+
+    def test_find_similar_candidate_supports_queue_mode(self):
+        text = "new kalashnikov procurement director arrested in moscow"
+        candidates = ["kalashnikov procurement director arrested in moscow in fraud case"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.83,
+            overlap_threshold=0.58,
+            require_both=True,
+        )
+        self.assertIsNotNone(match)
+
+    def test_find_similar_candidate_queue_mode_skips_loose_match(self):
+        text = "izhevsk opened a new urban forum about youth policy"
+        candidates = ["izhevsk published a new interview about youth volunteering"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.83,
+            overlap_threshold=0.58,
+            require_both=True,
+        )
+        self.assertIsNone(match)
+
+
+class TestIsSimilarToAny(unittest.TestCase):
+
+    def setUp(self):
+        self.rewriter = _FakeRewriter()
+
+    def test_detects_duplicate(self):
+        text = "izhevsk opens new shopping center in central district"
+        candidates = ["izhevsk opens new shopping center in central district today"]
+        self.assertTrue(is_similar_to_any(text, candidates, self.rewriter))
+
+    def test_passes_unique_content(self):
+        text = "major accident happened on pushkinskaya street"
+        candidates = ["new monument to a famous poet was installed in izhevsk"]
+        self.assertFalse(is_similar_to_any(text, candidates, self.rewriter))
+
+    def test_empty_candidates(self):
+        self.assertFalse(is_similar_to_any("any news item", [], self.rewriter))
+
+    def test_ignores_empty_candidate(self):
+        self.assertFalse(is_similar_to_any("real izhevsk news", [""], self.rewriter))
+
+    def test_find_similar_candidate_supports_queue_mode(self):
+        text = "kalashnikov procurement director arrested in moscow fraud case"
+        candidates = ["former kalashnikov procurement director arrested in moscow fraud case"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.70,
+            overlap_threshold=0.50,
+            require_both=True,
+        )
+        self.assertIsNotNone(match)
+
+    def test_find_similar_candidate_queue_mode_skips_loose_match(self):
+        text = "izhevsk opened a new urban forum about youth policy"
+        candidates = ["izhevsk published a new interview about youth volunteering"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.70,
+            overlap_threshold=0.50,
+            require_both=True,
+        )
+        self.assertIsNone(match)
+
 
 class TestDetectRubric(unittest.TestCase):
 

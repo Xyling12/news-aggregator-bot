@@ -156,6 +156,39 @@ def word_overlap(text1: str, text2: str) -> float:
     return len(words1 & words2) / len(union)
 
 
+def find_similar_candidate(
+    text: str,
+    candidates: list,
+    rewriter,
+    *,
+    similarity_threshold: float = 0.88,
+    overlap_threshold: float = 0.72,
+    require_both: bool = False,
+    hard_similarity_threshold: float = 0.96,
+    hard_overlap_threshold: float = 0.86,
+):
+    """Return details for the first candidate considered a duplicate."""
+    for existing in candidates:
+        if not existing or existing == text:
+            continue
+        similarity = 1.0 - rewriter.calculate_uniqueness(text, existing)
+        overlap = word_overlap(text, existing)
+
+        hard_match = similarity > hard_similarity_threshold or overlap > hard_overlap_threshold
+        soft_match = (
+            similarity > similarity_threshold and overlap > overlap_threshold
+            if require_both
+            else similarity > similarity_threshold or overlap > overlap_threshold
+        )
+        if hard_match or soft_match:
+            return {
+                "text": existing,
+                "similarity": round(similarity, 3),
+                "overlap": round(overlap, 3),
+            }
+    return None
+
+
 def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
     """Return True if *text* is too similar to any text in *candidates*.
 
@@ -170,15 +203,7 @@ def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
     The *rewriter* argument is the AIRewriter instance (passed in to avoid
     a circular import between utils ↔ ai_rewriter).
     """
-    for existing in candidates:
-        if not existing or existing == text:
-            continue
-        similarity = 1.0 - rewriter.calculate_uniqueness(text, existing)
-        if similarity > 0.88:   # very high: almost same text
-            return True
-        if word_overlap(text, existing) > 0.72:  # Jaccard: stricter threshold
-            return True
-    return False
+    return find_similar_candidate(text, candidates, rewriter) is not None
 
 
 # ── Rubric Detection ──────────────────────────────────────────────────────────
