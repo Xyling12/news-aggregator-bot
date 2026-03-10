@@ -510,6 +510,13 @@ class AIRewriter:
                         continue
                     logger.error(f"rewrite_full [{model_name}]: {e}")
 
+            # All models on current key exhausted — try next key before fallback
+            if self._switch_gemini_key():
+                logger.info("rewrite_full: switched to next Gemini key, retrying combined call")
+                # Recursive retry with the new key (only one level deep since
+                # _switch_gemini_key won't switch past the last key)
+                return await self.rewrite_full(original_text)
+
         # ── Fallback: call old methods separately ────────────────────────
         logger.warning("rewrite_full: combined call failed, falling back to separate methods")
         rewritten, engine = await self.rewrite(original_text)
