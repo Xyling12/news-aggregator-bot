@@ -517,15 +517,16 @@ class AIRewriter:
         photo_keywords = await self.generate_keywords(original_text)
         return rewritten, engine, hashtags, photo_keywords
 
-    async def ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
+    async def ask_ai(self, prompt: str, temperature: float = 0.8, _key_switched: bool = False) -> Optional[str]:
         """Generic AI text generation with Gemini→Groq→YandexGPT fallback.
 
         Used by ContentGenerator for rubric posts (weather, recipe, facts, etc.).
         """
         import re as _re
 
-        # Try Gemini first
+        # Try Gemini first — loop through all models on the current key
         if self._gemini_models:
+            all_quota = True  # Track whether ALL failures were quota-related
             try:
                 loop = asyncio.get_event_loop()
                 for _name, model in self._gemini_models:
@@ -547,14 +548,23 @@ class AIRewriter:
                             text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
                             logger.info(f"ask_ai: Gemini/{_name} OK ({len(text)} chars)")
                             return text
+                        all_quota = False
                     except Exception as gem_err:
                         err_str = str(gem_err).lower()
                         if "quota" in err_str or "limit" in err_str or "429" in err_str:
                             logger.warning(f"ask_ai: {_name} quota hit, trying next")
                             continue
                         logger.warning(f"ask_ai: {_name} error: {gem_err}")
+                        all_quota = False
             except Exception as e:
                 logger.warning(f"ask_ai: Gemini failed: {e}")
+                all_quota = False
+
+            # All models on current key hit quota — try switching to next key
+            if all_quota and not _key_switched:
+                if self._switch_gemini_key():
+                    logger.info("ask_ai: switched to next Gemini key, retrying...")
+                    return await self.ask_ai(prompt, temperature, _key_switched=True)
 
         # Fallback to Groq
         if self.config.groq_api_key:
