@@ -204,33 +204,50 @@ class AIRewriter:
         self.config = config
         self._gemini_model = None
         self._gemini_models = []  # Fallback models list
+        self._current_key_index = 0  # Index of active API key
         self._setup_gemini()
 
     def _setup_gemini(self):
-        """Initialize Gemini API client with fallback models."""
-        if self.config.gemini_api_key:
-            try:
-                genai.configure(api_key=self.config.gemini_api_key)
-                # Multiple models — each has separate free tier quota
-                # Updated March 2026: gemini-1.5-flash is deprecated (404)
-                model_names = self._resolve_gemini_model_names()
-                for name in model_names:
-                    try:
-                        model = genai.GenerativeModel(name)
-                        self._gemini_models.append((name, model))
-                    except Exception as e:
-                        logger.warning(f"Failed to init model {name}: {e}")
-                
-                if self._gemini_models:
-                    self._gemini_model = self._gemini_models[0][1]
-                    names = [m[0] for m in self._gemini_models]
-                    logger.info(f"Gemini API configured: {', '.join(names)}")
-                else:
-                    logger.error("No Gemini models available!")
-            except Exception as e:
-                logger.error(f"Failed to configure Gemini API: {e}")
-        else:
-            logger.error("⚠️ GEMINI_API_KEY is NOT SET! AI rewrite will NOT work!")
+        """Initialize Gemini API client using the current key index."""
+        keys = self.config.gemini_api_keys
+        if not keys:
+            logger.error("⚠️ No GEMINI API keys configured! AI rewrite will NOT work!")
+            return
+
+        key = keys[self._current_key_index]
+        key_num = self._current_key_index + 1
+        try:
+            genai.configure(api_key=key)
+            # Multiple models — each has separate free tier quota
+            model_names = self._resolve_gemini_model_names()
+            self._gemini_models = []
+            for name in model_names:
+                try:
+                    model = genai.GenerativeModel(name)
+                    self._gemini_models.append((name, model))
+                except Exception as e:
+                    logger.warning(f"Failed to init model {name}: {e}")
+
+            if self._gemini_models:
+                self._gemini_model = self._gemini_models[0][1]
+                names = [m[0] for m in self._gemini_models]
+                logger.info(f"Gemini API configured (key #{key_num}/{len(keys)}): {', '.join(names)}")
+            else:
+                logger.error(f"No Gemini models available for key #{key_num}!")
+        except Exception as e:
+            logger.error(f"Failed to configure Gemini API (key #{key_num}): {e}")
+
+    def _switch_gemini_key(self) -> bool:
+        """Switch to the next available Gemini API key. Returns True if switched."""
+        keys = self.config.gemini_api_keys
+        next_index = self._current_key_index + 1
+        if next_index >= len(keys):
+            logger.error(f"All {len(keys)} Gemini API key(s) exhausted!")
+            return False
+        self._current_key_index = next_index
+        logger.warning(f"🔑 Switching to Gemini API key #{next_index + 1}/{len(keys)}")
+        self._setup_gemini()
+        return bool(self._gemini_models)
 
     def _resolve_gemini_model_names(self) -> list[str]:
         """Return configured Gemini model ids, filtered against ListModels when possible."""
@@ -664,7 +681,11 @@ class AIRewriter:
                     logger.error(f"Gemini [{model_name}] error: {e}")
                     return None
 
-        logger.warning("All Gemini models exhausted (quota), falling back to YandexGPT...")
+        # All models on current key exhausted — try next key
+        if self._switch_gemini_key():
+            return await self._rewrite_with_gemini(text)
+
+        logger.warning("All Gemini API keys exhausted, falling back to YandexGPT...")
         return None
 
     async def _rewrite_with_yandexgpt(self, text: str) -> Optional[str]:

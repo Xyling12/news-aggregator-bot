@@ -30,6 +30,7 @@ class Config:
 
     # Google Gemini API
     gemini_api_key: str = ""
+    gemini_api_keys: List[str] = field(default_factory=list)  # All keys for fallback
     gemini_model_names: List[str] = field(default_factory=list)
 
     # Source channels to monitor
@@ -124,13 +125,22 @@ class Config:
         gemini_model_names_raw = os.getenv("GEMINI_MODEL_NAMES", "")
         gemini_model_names = [x.strip() for x in gemini_model_names_raw.split(",") if x.strip()]
 
+        # Support multiple Gemini keys: GEMINI_API_KEYS=key1,key2 or fallback to GEMINI_API_KEY
+        gemini_api_keys_raw = os.getenv("GEMINI_API_KEYS", "")
+        if gemini_api_keys_raw:
+            gemini_api_keys = [k.strip() for k in gemini_api_keys_raw.split(",") if k.strip()]
+        else:
+            single_key = os.getenv("GEMINI_API_KEY", "")
+            gemini_api_keys = [single_key] if single_key else []
+
         return cls(
             api_id=int(os.getenv("TELEGRAM_API_ID", "0")),
             api_hash=os.getenv("TELEGRAM_API_HASH", ""),
             bot_token=os.getenv("BOT_TOKEN", ""),
             target_channel=os.getenv("TARGET_CHANNEL", ""),
             admin_ids=admin_ids,
-            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            gemini_api_key=gemini_api_keys[0] if gemini_api_keys else "",
+            gemini_api_keys=gemini_api_keys,
             gemini_model_names=gemini_model_names,
             source_channels=source_channels,
             pixabay_api_key=os.getenv("PIXABAY_API_KEY", ""),
