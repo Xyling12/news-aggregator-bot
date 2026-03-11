@@ -85,6 +85,16 @@ class ContentScheduler:
                 pass
         logger.info("Content scheduler stopped")
 
+    async def _notify_admins(self, text: str) -> None:
+        """Send a short alert to all configured admin IDs."""
+        if not self.config.admin_ids:
+            return
+        for admin_id in self.config.admin_ids:
+            try:
+                await self.bot.send_message(admin_id, text, parse_mode=None)
+            except Exception as e:
+                logger.warning(f"Failed to notify admin {admin_id}: {e}")
+
     async def _scheduler_loop(self):
         """Main loop: check every 30 seconds if it's time to publish."""
         logger.info("Content scheduler loop started")
@@ -124,11 +134,14 @@ class ContentScheduler:
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
                             if retries >= MAX_CATCH_UP_RETRIES:
-                                logger.warning(
-                                    f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. "
-                                    f"Причина: {e}"
+                                msg = (
+                                    f"⚠️ Scheduler: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
+                                    f"Причина: {e}\n"
+                                    f"Проверь квоту Gemini API или добавь GROQ_API_KEY в env."
                                 )
+                                logger.warning(f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. Причина: {e}")
                                 self._published_today.add(slot_key)  # stop retrying
+                                asyncio.create_task(self._notify_admins(msg))
 
                     # Catch up: if bot was down and missed a slot (within 30 min window)
                     elif now.hour == hour and now.minute >= minute and now.minute < minute + 30:
@@ -145,11 +158,17 @@ class ContentScheduler:
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
                             if retries >= MAX_CATCH_UP_RETRIES:
+                                msg = (
+                                    f"⚠️ Catch-up: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
+                                    f"AI квота исчерпана (все Gemini ключи + fallback).\n"
+                                    f"Добавь GROQ_API_KEY в env для автоматического резерва."
+                                )
                                 logger.warning(
                                     f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
                                     f"SKIPPED для сегодня. AI квота исчерпана."
                                 )
                                 self._published_today.add(slot_key)  # stop retrying
+                                asyncio.create_task(self._notify_admins(msg))
 
                 await asyncio.sleep(30)  # Check every 30 seconds
 
