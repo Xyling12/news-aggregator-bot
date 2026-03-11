@@ -338,14 +338,17 @@ class ContentGenerator:
     async def _find_photo(self, text: str, hint_keywords: Optional[list] = None) -> Optional[str]:
         """Find a relevant stock photo URL for the given text.
 
+        No Gemini call for relevance check — saves quota.
+        Uses keyword match on Wikimedia description as sanity check.
+
         Args:
-            text: Post text (used to generate keywords via AI if hint_keywords not provided).
-            hint_keywords: Optional pre-defined keywords for this rubric — take priority over AI-generated ones.
+            text: Post text used to build search query if hint_keywords not provided.
+            hint_keywords: Optional pre-defined keywords for this rubric — take priority.
         """
         if not self._media:
             return None
 
-        # Use hint keywords first; fall back to AI-generated keywords
+        # Use hint keywords first; fall back to simple keyword extraction
         if hint_keywords:
             keywords = hint_keywords
         else:
@@ -353,7 +356,6 @@ class ContentGenerator:
                 prompt = PHOTO_KEYWORDS_PROMPT.format(text=text[:300])
                 keywords_text = await self._ask_ai(prompt, temperature=0.2)
                 if keywords_text:
-                    # Clean HTML tags that _ask_ai may have added
                     keywords_text = re.sub(r'<[^>]+>', '', keywords_text)
                     keywords = [kw.strip().lower() for kw in keywords_text.split(",")]
                 else:
@@ -361,33 +363,27 @@ class ContentGenerator:
             except Exception:
                 keywords = ["udmurtia", "russia", "nature"]
 
-        # Search Unsplash — pick a random photo from top-5 to add variety
+        # Search stock — take first result that has keyword in description (no Gemini)
         try:
             photos = await self._media.search_stock_photo(keywords, count=5)
             if photos:
+                # Try to find one with keyword overlap in description
                 for candidate in photos[:5]:
-                    url = candidate["url"]
-                    if not self._rewriter:
-                        return url
-                    is_relevant = await self._rewriter.check_photo_relevance_safe(text, url)
-                    if is_relevant:
-                        return url
+                    desc = candidate.get("description", "").lower()
+                    if any(kw.lower() in desc for kw in keywords[:3]):
+                        return candidate["url"]
+                # Fallback: just return first result
+                return photos[0]["url"]
         except Exception as e:
             logger.error(f"Photo search failed ({keywords}): {e}")
 
-        # Fallback: try broader keywords if specific ones returned nothing
-        if hint_keywords:
+        # Fallback: try broader keywords
+        if hint_keywords and len(hint_keywords) > 1:
             try:
                 fallback = [hint_keywords[0], "russia"]
-                photos = await self._media.search_stock_photo(fallback, count=5)
+                photos = await self._media.search_stock_photo(fallback, count=3)
                 if photos:
-                    for candidate in photos[:5]:
-                        url = candidate["url"]
-                        if not self._rewriter:
-                            return url
-                        is_relevant = await self._rewriter.check_photo_relevance_safe(text, url)
-                        if is_relevant:
-                            return url
+                    return photos[0]["url"]
             except Exception:
                 pass
 

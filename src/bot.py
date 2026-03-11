@@ -1428,45 +1428,53 @@ async def process_new_post(post_id: int):
 
     await _db.update_post_rewrite(post_id, rewritten)
 
-    # Step 3: Watermark detection on original photo (FIRST, before stock search)
-    has_watermark = False
-    if post["media_type"] == "photo" and post.get("media_local_path"):
-        _has_wm, confidence = _media_processor.detect_watermark(post["media_local_path"])
-        if _has_wm:
-            has_watermark = True
-            await _db.update_post_media(post_id, has_watermark=True)
-            logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
-
-    # Step 3b: Find stock photo.
-    # Always search; mandatory if watermark detected (must replace the original).
-    # Fallback to a curated Izhevsk photo if no stock found.
-    _IZHEVSK_FALLBACK_PHOTOS = [
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Izhevsk_letom.jpg/1280px-Izhevsk_letom.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Izhevsk_city_centre.jpg/1280px-Izhevsk_city_centre.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
-    ]
+    # Step 3b: Smart photo strategy (no Gemini call — saves quota)
+    #
+    # Priority:
+    #   1. Post has original photo WITHOUT watermark → use it as-is, skip stock search
+    #   2. Post has original photo WITH watermark → replace with stock
+    #   3. Post has no photo → search stock only if keywords are highly specific
+    #   4. No suitable photo found → publish text-only (better than generic stock)
     try:
-        # Use photo keywords from rewrite_full (already fetched, no extra Gemini call needed)
-        keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
         stock_url = None
-        if keywords:
-            stock_photos = await _media_processor.search_stock_photo(keywords, count=5)
-            # AI relevance check — pick first photo that actually matches the news topic
-            for candidate in stock_photos[:3]:
-                url = candidate["url"]
-                is_relevant = await _rewriter.check_photo_relevance_safe(original_text, url)
-                if is_relevant:
-                    stock_url = url
-                    logger.info(f"Post #{post_id}: stock photo approved for '{' '.join(keywords)}'")
-                    break
-            if not stock_url and stock_photos:
-                logger.info(f"Post #{post_id}: all stock photos failed relevance check — publishing without photo")
+        has_original_clean = (
+            post["media_type"] == "photo"
+            and post.get("media_local_path")
+            and not has_watermark
+        )
 
-        if not stock_url and (has_watermark or post["media_type"] != "photo"):
-            # No stock found but we must replace: use a random Izhevsk fallback
-            import random
-            stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
-            logger.info(f"Post #{post_id}: using Izhevsk fallback photo")
+        if has_original_clean:
+            # Original photo from source — best quality, keep it
+            logger.info(f"Post #{post_id}: using original source photo (no watermark)")
+        else:
+            # Need stock: either watermark replacement or no photo at all
+            keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
+
+            if keywords and len(keywords) >= 2:
+                stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
+
+                if stock_photos:
+                    # Take FIRST result — Wikimedia already sorts by relevance
+                    # Skip if description doesn't share ANY keyword (basic sanity check)
+                    best = stock_photos[0]
+                    desc_lower = (best.get("description", "") + " " + " ".join(keywords)).lower()
+                    # Accept if ≥1 keyword appears in description or title
+                    kw_match = any(kw.lower() in desc_lower for kw in keywords[:3])
+                    if kw_match or has_watermark:
+                        stock_url = best["url"]
+                        logger.info(
+                            f"Post #{post_id}: stock photo selected "
+                            f"(kw_match={kw_match}, keywords={keywords[:3]})"
+                        )
+                    else:
+                        logger.info(
+                            f"Post #{post_id}: stock photo description mismatch — "
+                            f"publishing text-only (keywords={keywords[:3]})"
+                        )
+                else:
+                    logger.info(f"Post #{post_id}: no stock photos found — publishing text-only")
+            else:
+                logger.info(f"Post #{post_id}: insufficient keywords for stock search — text-only")
 
         if stock_url:
             await _db.update_post_media(post_id, replacement_url=stock_url)
