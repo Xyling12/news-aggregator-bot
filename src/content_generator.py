@@ -531,7 +531,27 @@ class ContentGenerator:
         if text:
             text += "\n\n#погода #ижевск"
             text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
-        return await self._generate_with_photo(text, hint_keywords=["izhevsk winter city", "russia weather"])
+
+        # Pick photo keywords based on actual weather condition — no city lock
+        desc_lower = description.lower()
+        if any(w in desc_lower for w in ["снег", "снегопад", "метель", "крупа", "снежн"]):
+            weather_keywords = ["snowfall winter", "snow storm", "snowy day"]
+        elif any(w in desc_lower for w in ["мороз", "заморозк"]) or temp <= -15:
+            weather_keywords = ["frost cold winter", "frozen nature", "ice winter"]
+        elif any(w in desc_lower for w in ["гроза", "град", "ливень"]):
+            weather_keywords = ["thunderstorm lightning", "heavy rain storm", "dramatic storm sky"]
+        elif any(w in desc_lower for w in ["дождь", "морось", "осадк"]):
+            weather_keywords = ["rain drops", "rainy day city", "cloudy rain"]
+        elif any(w in desc_lower for w in ["туман", "изморозь"]):
+            weather_keywords = ["morning fog", "misty foggy landscape"]
+        elif any(w in desc_lower for w in ["ясно", "солнечн", "ясно"]) and temp > 10:
+            weather_keywords = ["sunny day", "clear blue sky", "sunny spring"]
+        elif any(w in desc_lower for w in ["облачн", "пасмурн"]):
+            weather_keywords = ["cloudy sky", "overcast weather", "grey clouds"]
+        else:
+            weather_keywords = ["winter city morning", "cold weather season"]
+
+        return await self._generate_with_photo(text, hint_keywords=weather_keywords)
 
     async def generate_history_fact(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate 'This day in history' post."""
