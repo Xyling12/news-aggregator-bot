@@ -59,6 +59,7 @@ class ContentScheduler:
         self._task: Optional[asyncio.Task] = None
         self._published_today: set[str] = set()  # Track what was published today
         self._last_date: Optional[str] = None
+        self._failed_slots: dict[str, int] = {}  # slot_key -> retry count
 
     def _now(self) -> datetime:
         """Get current time in Izhevsk timezone."""
@@ -96,14 +97,18 @@ class ContentScheduler:
                 # Reset published list at midnight
                 if self._last_date != today_str:
                     self._published_today.clear()
+                    self._failed_slots.clear()
                     self._last_date = today_str
                     logger.info(f"New day: {today_str}, schedule reset")
+
+                # Max retries for a single slot before giving up for today
+                MAX_CATCH_UP_RETRIES = 2
 
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
                     slot_key = f"{today_str}_{rubric}"
 
-                    # Already published?
+                    # Already published or permanently skipped?
                     if slot_key in self._published_today:
                         continue
 
@@ -113,18 +118,38 @@ class ContentScheduler:
                         try:
                             await self._publish_rubric(rubric, label)
                             self._published_today.add(slot_key)
+                            self._failed_slots.pop(slot_key, None)  # clear on success
                         except Exception as e:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
+                            retries = self._failed_slots.get(slot_key, 0) + 1
+                            self._failed_slots[slot_key] = retries
+                            if retries >= MAX_CATCH_UP_RETRIES:
+                                logger.warning(
+                                    f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. "
+                                    f"Причина: {e}"
+                                )
+                                self._published_today.add(slot_key)  # stop retrying
 
                     # Catch up: if bot was down and missed a slot (within 30 min window)
                     elif now.hour == hour and now.minute >= minute and now.minute < minute + 30:
-                        if slot_key not in self._published_today:
-                            logger.info(f"⏰ Catch-up publish: {label} ({rubric})")
-                            try:
-                                await self._publish_rubric(rubric, label)
-                                self._published_today.add(slot_key)
-                            except Exception as e:
-                                logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
+                        retries = self._failed_slots.get(slot_key, 0)
+                        if retries >= MAX_CATCH_UP_RETRIES:
+                            continue  # Already gave up on this slot
+                        logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{MAX_CATCH_UP_RETRIES}]")
+                        try:
+                            await self._publish_rubric(rubric, label)
+                            self._published_today.add(slot_key)
+                            self._failed_slots.pop(slot_key, None)
+                        except Exception as e:
+                            logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
+                            retries = self._failed_slots.get(slot_key, 0) + 1
+                            self._failed_slots[slot_key] = retries
+                            if retries >= MAX_CATCH_UP_RETRIES:
+                                logger.warning(
+                                    f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
+                                    f"SKIPPED для сегодня. AI квота исчерпана."
+                                )
+                                self._published_today.add(slot_key)  # stop retrying
 
                 await asyncio.sleep(30)  # Check every 30 seconds
 
