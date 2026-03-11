@@ -243,20 +243,31 @@ class ContentScheduler:
         text = _md_to_html(text)
 
         # Publish with photo if available
+        # IMPORTANT: Telegram caption limit is 1024 chars. For long posts (5 facts, history, etc.)
+        # we send photo first (no caption), then full text as a separate message.
+        CAPTION_LIMIT = 900  # safe threshold below 1024
         try:
             if photo_url:
-                try:
+                use_caption = len(text) <= CAPTION_LIMIT
+
+                async def _send_photo_inner(photo_source) -> bool:
+                    """Try send_photo; return True on success."""
+                    nonlocal msg
+                    caption_arg = text[:CAPTION_LIMIT] if use_caption else None
                     msg = await self.bot.send_photo(
                         target,
-                        photo=photo_url,
-                        caption=text[:1024],
-                        parse_mode=ParseMode.HTML,
+                        photo=photo_source,
+                        caption=caption_arg,
+                        parse_mode=ParseMode.HTML if caption_arg else None,
                     )
-                    logger.info(f"✅ Published {label} with photo to {target}")
+                    return True
+
+                photo_sent = False
+                try:
+                    photo_sent = await _send_photo_inner(photo_url)
+                    logger.info(f"✅ Published {label} photo to {target} (caption={'yes' if use_caption else 'no'})")
                 except Exception as photo_err:
                     logger.warning(f"Photo send by URL failed ({photo_err}), trying file upload")
-                    # Telegram can't fetch some URLs (Wikimedia CDN, etc.) — download locally
-                    uploaded = False
                     try:
                         headers = {"User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"}
                         async with aiohttp.ClientSession(headers=headers) as session:
@@ -265,23 +276,27 @@ class ContentScheduler:
                                     img_bytes = await resp.read()
                                     if len(img_bytes) > 1000:
                                         input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
-                                        msg = await self.bot.send_photo(
-                                            target,
-                                            photo=input_file,
-                                            caption=text[:1024],
-                                            parse_mode=ParseMode.HTML,
-                                        )
-                                        logger.info(f"✅ Published {label} with photo (file upload) to {target}")
-                                        uploaded = True
+                                        photo_sent = await _send_photo_inner(input_file)
+                                        logger.info(f"✅ Published {label} photo (file upload) to {target}")
                     except Exception as upload_err:
                         logger.warning(f"Photo file upload also failed ({upload_err}), sending text only")
-                    if not uploaded:
-                        msg = await self.bot.send_message(
-                            target,
-                            text[:4096],
-                            parse_mode=ParseMode.HTML,
-                        )
-                        logger.info(f"✅ Published {label} (text only) to {target}")
+
+                # If text was too long for caption — send as separate message
+                if photo_sent and not use_caption:
+                    msg = await self.bot.send_message(
+                        target,
+                        text[:4096],
+                        parse_mode=ParseMode.HTML,
+                    )
+                    logger.info(f"✅ Published {label} full text (separate message) to {target}")
+                elif not photo_sent:
+                    # Photo completely failed — fallback to text-only
+                    msg = await self.bot.send_message(
+                        target,
+                        text[:4096],
+                        parse_mode=ParseMode.HTML,
+                    )
+                    logger.info(f"✅ Published {label} (text only, photo failed) to {target}")
             else:
                 msg = await self.bot.send_message(
                     target,
