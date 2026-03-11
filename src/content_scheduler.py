@@ -9,7 +9,10 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable, List
 
+import io
+
 import aiohttp
+from PIL import Image as PILImage
 
 from aiogram import Bot
 from aiogram.types import FSInputFile, BufferedInputFile
@@ -203,7 +206,17 @@ class ContentScheduler:
                                 if resp.status == 200:
                                     img_bytes = await resp.read()
                                     if len(img_bytes) > 1000:
-                                        input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
+                                        # Convert to JPEG in memory to fix format mismatch
+                                        # (Wikimedia returns PNG/WEBP — Telegram fails if bytes ≠ extension)
+                                        pil_img = PILImage.open(io.BytesIO(img_bytes))
+                                        if pil_img.mode in ('RGBA', 'LA', 'P'):
+                                            pil_img = pil_img.convert('RGB')
+                                        jpeg_buf = io.BytesIO()
+                                        pil_img.save(jpeg_buf, format='JPEG', quality=85)
+                                        jpeg_bytes = jpeg_buf.getvalue()
+                                        if len(jpeg_bytes) > 8 * 1024 * 1024:
+                                            raise ValueError("Image too large for Telegram (>8MB)")
+                                        input_file = BufferedInputFile(jpeg_bytes, filename="photo.jpg")
                                         msg = await self.bot.send_photo(
                                             target,
                                             photo=input_file,

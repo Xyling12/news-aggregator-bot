@@ -304,6 +304,31 @@ class TestMediaProcessor(unittest.TestCase):
         proc = MediaProcessor(media_dir="/tmp/test_media")
         self.assertEqual(proc.pexels_key, "")
 
+    def test_jpeg_conversion_from_png_rgba(self):
+        """PNG с прозрачностью (RGBA) должен конвертироваться в JPEG без ошибок.
+        
+        Воспроизводит логику из content_scheduler._publish_rubric (fallback фото).
+        Wikimedia отдаёт PNG/WEBP, а Telegram ожидает JPEG — отсюда IMAGE_PROCESS_FAILED.
+        """
+        import io
+        from PIL import Image
+        # Синтетический PNG RGBA (прозрачный фон)
+        img = Image.new("RGBA", (200, 150), (100, 150, 200, 128))
+        png_buf = io.BytesIO()
+        img.save(png_buf, format="PNG")
+        png_bytes = png_buf.getvalue()
+        # Логика из content_scheduler
+        pil_img = Image.open(io.BytesIO(png_bytes))
+        if pil_img.mode in ('RGBA', 'LA', 'P'):
+            pil_img = pil_img.convert('RGB')
+        jpeg_buf = io.BytesIO()
+        pil_img.save(jpeg_buf, format='JPEG', quality=85)
+        jpeg_bytes = jpeg_buf.getvalue()
+        # JPEG начинается с FFD8FF
+        self.assertEqual(jpeg_bytes[:2], b'\xff\xd8')
+        self.assertGreater(len(jpeg_bytes), 100)
+        self.assertLess(len(jpeg_bytes), 8 * 1024 * 1024)
+
 
 # ─── docker-compose.yml ───────────────────────────────────────────────────────
 

@@ -110,6 +110,7 @@ class VKPublisher:
                     hint = {
                         5:  "Invalid access token — check VK_TOKEN",
                         15: "Access denied — check group admin rights",
+                        27: "Group token cannot upload photos — use a user token with 'photos' scope (text posts still work)",
                         100: "Invalid parameter passed to VK API",
                         214: "Post rejected by VK moderation",
                     }.get(error_code, "")
