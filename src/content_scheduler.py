@@ -62,6 +62,7 @@ class ContentScheduler:
         self._task: Optional[asyncio.Task] = None
         self._published_today: set[str] = set()  # Track what was published today
         self._last_date: Optional[str] = None
+        self._failed_slots: dict[str, int] = {}  # slot_key -> retry count
 
     def _now(self) -> datetime:
         """Get current time in Izhevsk timezone."""
@@ -87,6 +88,16 @@ class ContentScheduler:
                 pass
         logger.info("Content scheduler stopped")
 
+    async def _notify_admins(self, text: str) -> None:
+        """Send a short alert to all configured admin IDs."""
+        if not self.config.admin_ids:
+            return
+        for admin_id in self.config.admin_ids:
+            try:
+                await self.bot.send_message(admin_id, text, parse_mode=None)
+            except Exception as e:
+                logger.warning(f"Failed to notify admin {admin_id}: {e}")
+
     async def _scheduler_loop(self):
         """Main loop: check every 30 seconds if it's time to publish."""
         logger.info("Content scheduler loop started")
@@ -99,14 +110,18 @@ class ContentScheduler:
                 # Reset published list at midnight
                 if self._last_date != today_str:
                     self._published_today.clear()
+                    self._failed_slots.clear()
                     self._last_date = today_str
                     logger.info(f"New day: {today_str}, schedule reset")
+
+                # Max retries for a single slot before giving up for today
+                MAX_CATCH_UP_RETRIES = 2
 
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
                     slot_key = f"{today_str}_{rubric}"
 
-                    # Already published?
+                    # Already published or permanently skipped?
                     if slot_key in self._published_today:
                         continue
 
@@ -116,18 +131,47 @@ class ContentScheduler:
                         try:
                             await self._publish_rubric(rubric, label)
                             self._published_today.add(slot_key)
+                            self._failed_slots.pop(slot_key, None)  # clear on success
                         except Exception as e:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
+                            retries = self._failed_slots.get(slot_key, 0) + 1
+                            self._failed_slots[slot_key] = retries
+                            if retries >= MAX_CATCH_UP_RETRIES:
+                                msg = (
+                                    f"⚠️ Scheduler: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
+                                    f"Причина: {e}\n"
+                                    f"Проверь квоту Gemini API или добавь GROQ_API_KEY в env."
+                                )
+                                logger.warning(f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. Причина: {e}")
+                                self._published_today.add(slot_key)  # stop retrying
+                                asyncio.create_task(self._notify_admins(msg))
 
                     # Catch up: if bot was down and missed a slot (within 30 min window)
                     elif now.hour == hour and now.minute >= minute and now.minute < minute + 30:
-                        if slot_key not in self._published_today:
-                            logger.info(f"⏰ Catch-up publish: {label} ({rubric})")
-                            try:
-                                await self._publish_rubric(rubric, label)
-                                self._published_today.add(slot_key)
-                            except Exception as e:
-                                logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
+                        retries = self._failed_slots.get(slot_key, 0)
+                        if retries >= MAX_CATCH_UP_RETRIES:
+                            continue  # Already gave up on this slot
+                        logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{MAX_CATCH_UP_RETRIES}]")
+                        try:
+                            await self._publish_rubric(rubric, label)
+                            self._published_today.add(slot_key)
+                            self._failed_slots.pop(slot_key, None)
+                        except Exception as e:
+                            logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
+                            retries = self._failed_slots.get(slot_key, 0) + 1
+                            self._failed_slots[slot_key] = retries
+                            if retries >= MAX_CATCH_UP_RETRIES:
+                                msg = (
+                                    f"⚠️ Catch-up: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
+                                    f"AI квота исчерпана (все Gemini ключи + fallback).\n"
+                                    f"Добавь GROQ_API_KEY в env для автоматического резерва."
+                                )
+                                logger.warning(
+                                    f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
+                                    f"SKIPPED для сегодня. AI квота исчерпана."
+                                )
+                                self._published_today.add(slot_key)  # stop retrying
+                                asyncio.create_task(self._notify_admins(msg))
 
                 await asyncio.sleep(30)  # Check every 30 seconds
 
@@ -184,21 +228,49 @@ class ContentScheduler:
         except ImportError:
             pass  # Safety: never block publication due to import errors
 
+        # Convert any leftover Markdown to Telegram HTML (safety net — prompts forbid Markdown,
+        # but AI sometimes ignores instructions)
+        import re as _re
+        def _md_to_html(t: str) -> str:
+            # **bold** → <b>bold</b>
+            t = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t, flags=_re.DOTALL)
+            # *italic* or _italic_ → <i>italic</i>
+            t = _re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', t, flags=_re.DOTALL)
+            t = _re.sub(r'__(.+?)__', r'<i>\1</i>', t, flags=_re.DOTALL)
+            # `code` → <code>code</code>
+            t = _re.sub(r'`(.+?)`', r'<code>\1</code>', t)
+            # Remove bare # headers (just strip the #)
+            t = _re.sub(r'^#{1,3}\s*', '', t, flags=_re.MULTILINE)
+            return t
+
+        text = _md_to_html(text)
+
         # Publish with photo if available
+        # IMPORTANT: Telegram caption limit is 1024 chars. For long posts (5 facts, history, etc.)
+        # we send photo first (no caption), then full text as a separate message.
+        CAPTION_LIMIT = 900  # safe threshold below 1024
         try:
             if photo_url:
-                try:
+                use_caption = len(text) <= CAPTION_LIMIT
+
+                async def _send_photo_inner(photo_source) -> bool:
+                    """Try send_photo; return True on success."""
+                    nonlocal msg
+                    caption_arg = text[:CAPTION_LIMIT] if use_caption else None
                     msg = await self.bot.send_photo(
                         target,
-                        photo=photo_url,
-                        caption=text[:1024],
-                        parse_mode=ParseMode.HTML,
+                        photo=photo_source,
+                        caption=caption_arg,
+                        parse_mode=ParseMode.HTML if caption_arg else None,
                     )
-                    logger.info(f"✅ Published {label} with photo to {target}")
+                    return True
+
+                photo_sent = False
+                try:
+                    photo_sent = await _send_photo_inner(photo_url)
+                    logger.info(f"✅ Published {label} photo to {target} (caption={'yes' if use_caption else 'no'})")
                 except Exception as photo_err:
                     logger.warning(f"Photo send by URL failed ({photo_err}), trying file upload")
-                    # Telegram can't fetch some URLs (Wikimedia CDN, etc.) — download locally
-                    uploaded = False
                     try:
                         headers = {"User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"}
                         async with aiohttp.ClientSession(headers=headers) as session:
@@ -217,23 +289,27 @@ class ContentScheduler:
                                         if len(jpeg_bytes) > 8 * 1024 * 1024:
                                             raise ValueError("Image too large for Telegram (>8MB)")
                                         input_file = BufferedInputFile(jpeg_bytes, filename="photo.jpg")
-                                        msg = await self.bot.send_photo(
-                                            target,
-                                            photo=input_file,
-                                            caption=text[:1024],
-                                            parse_mode=ParseMode.HTML,
-                                        )
-                                        logger.info(f"✅ Published {label} with photo (file upload) to {target}")
-                                        uploaded = True
+                                        photo_sent = await _send_photo_inner(input_file)
+                                        logger.info(f"✅ Published {label} photo (file upload) to {target}")
                     except Exception as upload_err:
                         logger.warning(f"Photo file upload also failed ({upload_err}), sending text only")
-                    if not uploaded:
-                        msg = await self.bot.send_message(
-                            target,
-                            text[:4096],
-                            parse_mode=ParseMode.HTML,
-                        )
-                        logger.info(f"✅ Published {label} (text only) to {target}")
+
+                # If text was too long for caption — send as separate message
+                if photo_sent and not use_caption:
+                    msg = await self.bot.send_message(
+                        target,
+                        text[:4096],
+                        parse_mode=ParseMode.HTML,
+                    )
+                    logger.info(f"✅ Published {label} full text (separate message) to {target}")
+                elif not photo_sent:
+                    # Photo completely failed — fallback to text-only
+                    msg = await self.bot.send_message(
+                        target,
+                        text[:4096],
+                        parse_mode=ParseMode.HTML,
+                    )
+                    logger.info(f"✅ Published {label} (text only, photo failed) to {target}")
             else:
                 msg = await self.bot.send_message(
                     target,

@@ -14,7 +14,15 @@ import yaml
 # Добавляем корень проекта в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.utils import clean_text, word_overlap, is_similar_to_any, detect_rubric, format_post
+from src.utils import clean_text, word_overlap, is_similar_to_any, find_similar_candidate, detect_rubric, format_post
+from src.bot import (
+    _has_local_geo,
+    _looks_federal_news,
+    _is_breaking_candidate,
+    _has_non_local_geo,
+    _should_reject_by_geo,
+)
+from src.ai_rewriter import _parse_binary_answer
 from src.config import Config
 from src.vk_publisher import VKPublisher
 
@@ -151,6 +159,81 @@ class TestIsSimilarToAny(unittest.TestCase):
 
 # ─── utils: detect_rubric ─────────────────────────────────────────────────────
 
+    def test_find_similar_candidate_supports_queue_mode(self):
+        text = "new kalashnikov procurement director arrested in moscow"
+        candidates = ["kalashnikov procurement director arrested in moscow in fraud case"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.83,
+            overlap_threshold=0.58,
+            require_both=True,
+        )
+        self.assertIsNotNone(match)
+
+    def test_find_similar_candidate_queue_mode_skips_loose_match(self):
+        text = "izhevsk opened a new urban forum about youth policy"
+        candidates = ["izhevsk published a new interview about youth volunteering"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.83,
+            overlap_threshold=0.58,
+            require_both=True,
+        )
+        self.assertIsNone(match)
+
+
+class TestIsSimilarToAny(unittest.TestCase):
+
+    def setUp(self):
+        self.rewriter = _FakeRewriter()
+
+    def test_detects_duplicate(self):
+        text = "izhevsk opens new shopping center in central district"
+        candidates = ["izhevsk opens new shopping center in central district today"]
+        self.assertTrue(is_similar_to_any(text, candidates, self.rewriter))
+
+    def test_passes_unique_content(self):
+        text = "major accident happened on pushkinskaya street"
+        candidates = ["new monument to a famous poet was installed in izhevsk"]
+        self.assertFalse(is_similar_to_any(text, candidates, self.rewriter))
+
+    def test_empty_candidates(self):
+        self.assertFalse(is_similar_to_any("any news item", [], self.rewriter))
+
+    def test_ignores_empty_candidate(self):
+        self.assertFalse(is_similar_to_any("real izhevsk news", [""], self.rewriter))
+
+    def test_find_similar_candidate_supports_queue_mode(self):
+        text = "kalashnikov procurement director arrested in moscow fraud case"
+        candidates = ["former kalashnikov procurement director arrested in moscow fraud case"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.70,
+            overlap_threshold=0.50,
+            require_both=True,
+        )
+        self.assertIsNotNone(match)
+
+    def test_find_similar_candidate_queue_mode_skips_loose_match(self):
+        text = "izhevsk opened a new urban forum about youth policy"
+        candidates = ["izhevsk published a new interview about youth volunteering"]
+        match = find_similar_candidate(
+            text,
+            candidates,
+            self.rewriter,
+            similarity_threshold=0.70,
+            overlap_threshold=0.50,
+            require_both=True,
+        )
+        self.assertIsNone(match)
+
+
 class TestDetectRubric(unittest.TestCase):
 
     def test_detects_accident(self):
@@ -235,6 +318,127 @@ class TestConfig(unittest.TestCase):
     def test_breaking_keywords_not_empty(self):
         cfg = Config()
         self.assertGreater(len(cfg.breaking_keywords), 0)
+
+    def test_from_env_parses_gemini_model_names(self):
+        original = os.environ.get("GEMINI_MODEL_NAMES")
+        try:
+            os.environ["GEMINI_MODEL_NAMES"] = "gemini-2.5-flash, gemini-2.5-pro ,gemini-2.0-flash"
+            cfg = Config.from_env()
+            self.assertEqual(
+                cfg.gemini_model_names,
+                ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+            )
+        finally:
+            if original is None:
+                os.environ.pop("GEMINI_MODEL_NAMES", None)
+            else:
+                os.environ["GEMINI_MODEL_NAMES"] = original
+
+    def test_from_env_parses_groq_settings(self):
+        original_key = os.environ.get("GROQ_API_KEY")
+        original_model = os.environ.get("GROQ_MODEL")
+        try:
+            os.environ["GROQ_API_KEY"] = "test_groq_key"
+            os.environ["GROQ_MODEL"] = "llama-3.1-8b-instant"
+            cfg = Config.from_env()
+            self.assertEqual(cfg.groq_api_key, "test_groq_key")
+            self.assertEqual(cfg.groq_model, "llama-3.1-8b-instant")
+        finally:
+            if original_key is None:
+                os.environ.pop("GROQ_API_KEY", None)
+            else:
+                os.environ["GROQ_API_KEY"] = original_key
+
+            if original_model is None:
+                os.environ.pop("GROQ_MODEL", None)
+            else:
+                os.environ["GROQ_MODEL"] = original_model
+
+
+class TestRegionFilters(unittest.TestCase):
+
+    def test_local_geo_detected_in_plain_text(self):
+        self.assertTrue(_has_local_geo("В Ижевске откроют новый парк"))
+
+    def test_hashtag_only_geo_does_not_count(self):
+        text = "Сочи и близлежащие\nОтбой опасности по БПЛА\n#Ижевск #Удмуртия"
+        self.assertFalse(_has_local_geo(text))
+
+    def test_federal_news_detected_without_geo(self):
+        self.assertTrue(_looks_federal_news("Госдума приняла закон о повышении пенсий"))
+
+
+class TestGeoGate(unittest.TestCase):
+
+    def test_non_local_geo_detected(self):
+        self.assertTrue(_has_non_local_geo("Сочи и Краснодарский край: отбой опасности"))
+
+    def test_non_local_source_without_geo_is_rejected(self):
+        self.assertTrue(
+            _should_reject_by_geo(
+                is_local_source=False,
+                has_local_geo=False,
+                looks_federal=False,
+                has_non_local_geo=False,
+            )
+        )
+
+    def test_local_source_without_geo_and_without_foreign_marker_is_allowed(self):
+        self.assertFalse(
+            _should_reject_by_geo(
+                is_local_source=True,
+                has_local_geo=False,
+                looks_federal=False,
+                has_non_local_geo=False,
+            )
+        )
+
+    def test_local_source_with_foreign_marker_is_rejected(self):
+        self.assertTrue(
+            _should_reject_by_geo(
+                is_local_source=True,
+                has_local_geo=False,
+                looks_federal=False,
+                has_non_local_geo=True,
+            )
+        )
+
+
+class TestBreakingGate(unittest.TestCase):
+
+    def test_radar_without_local_geo_is_not_breaking(self):
+        text = "Сочи и близлежащие\nОтбой опасности по БПЛА"
+        self.assertFalse(
+            _is_breaking_candidate(
+                text,
+                is_radar_source=True,
+                has_geo=False,
+                breaking_keywords=["бпла", "опасность"],
+            )
+        )
+
+    def test_radar_with_local_geo_is_breaking(self):
+        text = "В Удмуртии объявлена опасность БПЛА"
+        self.assertTrue(
+            _is_breaking_candidate(
+                text,
+                is_radar_source=True,
+                has_geo=True,
+                breaking_keywords=["бпла", "опасность"],
+            )
+        )
+
+
+class TestBinaryAnswerParsing(unittest.TestCase):
+
+    def test_parse_yes(self):
+        self.assertTrue(_parse_binary_answer("YES"))
+
+    def test_parse_no(self):
+        self.assertFalse(_parse_binary_answer("NO"))
+
+    def test_parse_russian_yes(self):
+        self.assertTrue(_parse_binary_answer("Да"))
 
 
 # ─── vk_publisher ─────────────────────────────────────────────────────────────

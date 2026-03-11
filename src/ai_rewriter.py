@@ -19,6 +19,39 @@ from src.config import Config
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_GEMINI_MODEL_NAMES = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+]
+
+
+def _parse_binary_answer(answer: str) -> Optional[bool]:
+    """Parse a strict YES/NO answer from a model response."""
+    if not answer:
+        return None
+
+    normalized = answer.strip().lower()
+    for char in ".!?:":
+        normalized = normalized.replace(char, " ")
+    tokens = [token for token in normalized.split() if token]
+    if not tokens:
+        return None
+
+    yes_tokens = {"yes", "да", "true"}
+    no_tokens = {"no", "нет", "false"}
+    if tokens[0] in yes_tokens:
+        return True
+    if tokens[0] in no_tokens:
+        return False
+    if any(token in yes_tokens for token in tokens):
+        return True
+    if any(token in no_tokens for token in tokens):
+        return False
+    return None
+
 # Prompt template for news rewriting — premium Telegram channel style
 REWRITE_PROMPT = """Ты — главный редактор популярного новостного Telegram-канала "Ижевск Сегодня".
 
@@ -86,29 +119,42 @@ else:
     SAFETY_SETTINGS = None
 
 # Prompt to check if news is relevant to Izhevsk/Udmurtia readers
-RELEVANCE_PROMPT = """Ты — строгий редактор регионального новостного канала «Ижевск Сегодня» (Удмуртия).
+RELEVANCE_PROMPT = """You decide whether a news item fits a regional channel about Izhevsk and Udmurtia.
 
-Публикуй ТОЛЬКО то, что касается жителей Ижевска и Удмуртии.
+Answer YES only if at least one statement is true:
+- The text directly mentions Izhevsk, Udmurtia, the Udmurt Republic, or a city in Udmurtia.
+- It is clearly nationwide news that directly affects residents in Izhevsk too, such as pensions, taxes, tariffs, benefits, or key-rate decisions.
+- It is a rating, research, or major story where Izhevsk or Udmurtia is explicitly involved.
 
-Новость НУЖНА (ответь ДА) ТОЛЬКО если:
-- Прямо упоминает Ижевск, Удмуртию, Удмуртскую Республику, города Удмуртии
-- Федеральный закон/указ с ПРЯМЫМ влиянием на ВСЕХ россиян (пенсии, налоги, льготы, единые тарифы)
-- Общероссийская экономика: курс рубля, ключевая ставка, федеральная инфляция
-- Сборная России на крупных международных турнирах
+Answer NO if any statement is true:
+- The story is about another region with no explicit connection to Izhevsk or Udmurtia.
+- It is a local emergency, drone alert, accident, fire, utility issue, or appointment in another region.
+- The text has no explicit local connection and is not clearly nationwide.
 
-Новость НЕ НУЖНА (ответь НЕТ) если:
-- Происшествие, авария, пожар, криминал в ДРУГОМ регионе (не Удмуртия)
-- Военные тревоги, обстрелы, БПЛА — если регион НЕ Удмуртия
-- Меры безопасности в конкретном ЧУЖОМ регионе (Саратов, Москва, Белгород и т.д.)
-- Ремонт, стройка, ЖКХ в ДРУГОМ регионе
-- Местные назначения, выборы, мероприятия в ДРУГОМ регионе
-- Новость не содержит слово Удмуртия/Ижевск и не является федеральным законом
+If unsure, answer NO.
+Reply with exactly one word: YES or NO.
 
-Правило: если сомневаешься — ответь НЕТ.
+News text:
+{text}"""
 
-Ответь ТОЛЬКО одним словом: ДА или НЕТ.
 
-Новость: {text}"""
+# Prompt to check if a news post is genuinely important/urgent for readers
+URGENCY_PROMPT = """You decide whether a news item is important enough to publish in a regional news channel.
+
+Answer YES if it is genuinely important, urgent, or useful:
+- emergency, accident, fire, court case, arrest, outage, road closure, public safety warning
+- a decision that clearly affects money, transport, utilities, schools, hospitals, or daily life
+- a major local opening, closure, investigation, event, rating, or research result
+
+Answer NO if it is mostly noise:
+- press release, promotion, greeting, vague announcement, opinion without facts
+- routine meeting or ceremonial event without concrete consequences
+- recycled old news or trivial filler
+
+Reply with exactly one word: YES or NO.
+
+News text:
+{text}"""
 
 
 # Phrases that indicate AI refused to process the text (safety/policy filters)
@@ -158,38 +204,141 @@ class AIRewriter:
         self.config = config
         self._gemini_model = None
         self._gemini_models = []  # Fallback models list
+        self._current_key_index = 0  # Index of active API key
+
+        # ── Circuit Breaker — auto-bypass Gemini when it keeps failing ─────
+        # After _CB_MAX_ERRORS errors within _CB_WINDOW_SECONDS, circuit OPENS:
+        # all requests go straight to YandexGPT/Groq, saving time and quota.
+        # Resets automatically at midnight (new day = fresh quota).
+        self._cb_error_times: list = []      # timestamps of recent Gemini errors
+        self._CB_MAX_ERRORS: int = 3         # trip after this many errors
+        self._CB_WINDOW_SECONDS: int = 3600  # within this window (1 hour)
+        self._cb_open_until: float = 0.0     # monotonic time when circuit re-closes
+
         self._setup_gemini()
 
     def _setup_gemini(self):
-        """Initialize Gemini API client with fallback models."""
-        if self.config.gemini_api_key:
-            try:
-                genai.configure(api_key=self.config.gemini_api_key)
-                # Multiple models — each has separate free tier quota
-                # Updated March 2026: gemini-1.5-flash is deprecated (404)
-                model_names = [
-                    "gemini-2.0-flash",           # Primary: fast, free tier
-                    "gemini-2.0-flash-lite",       # Fallback: lighter version
-                    "gemini-2.5-pro-exp-03-25",    # Fallback: experimental but available
-                    "gemini-1.5-flash-latest",     # Last resort: 1.5 via latest alias
-                ]
-                for name in model_names:
-                    try:
-                        model = genai.GenerativeModel(name)
-                        self._gemini_models.append((name, model))
-                    except Exception as e:
-                        logger.warning(f"Failed to init model {name}: {e}")
-                
-                if self._gemini_models:
-                    self._gemini_model = self._gemini_models[0][1]
-                    names = [m[0] for m in self._gemini_models]
-                    logger.info(f"Gemini API configured: {', '.join(names)}")
-                else:
-                    logger.error("No Gemini models available!")
-            except Exception as e:
-                logger.error(f"Failed to configure Gemini API: {e}")
-        else:
-            logger.error("⚠️ GEMINI_API_KEY is NOT SET! AI rewrite will NOT work!")
+        """Initialize Gemini API client using the current key index."""
+        keys = self.config.gemini_api_keys
+        if not keys:
+            logger.error("⚠️ No GEMINI API keys configured! AI rewrite will NOT work!")
+            return
+
+        key = keys[self._current_key_index]
+        key_num = self._current_key_index + 1
+        try:
+            genai.configure(api_key=key)
+            # Multiple models — each has separate free tier quota
+            model_names = self._resolve_gemini_model_names()
+            self._gemini_models = []
+            for name in model_names:
+                try:
+                    model = genai.GenerativeModel(name)
+                    self._gemini_models.append((name, model))
+                except Exception as e:
+                    logger.warning(f"Failed to init model {name}: {e}")
+
+            if self._gemini_models:
+                self._gemini_model = self._gemini_models[0][1]
+                names = [m[0] for m in self._gemini_models]
+                logger.info(f"Gemini API configured (key #{key_num}/{len(keys)}): {', '.join(names)}")
+            else:
+                logger.error(f"No Gemini models available for key #{key_num}!")
+        except Exception as e:
+            logger.error(f"Failed to configure Gemini API (key #{key_num}): {e}")
+
+    def _switch_gemini_key(self) -> bool:
+        """Switch to the next available Gemini API key. Returns True if switched."""
+        keys = self.config.gemini_api_keys
+        next_index = self._current_key_index + 1
+        if next_index >= len(keys):
+            logger.error(f"All {len(keys)} Gemini API key(s) exhausted!")
+            return False
+        self._current_key_index = next_index
+        logger.warning(f"🔑 Switching to Gemini API key #{next_index + 1}/{len(keys)}")
+        self._setup_gemini()
+        return bool(self._gemini_models)
+
+    def _gemini_circuit_open(self) -> bool:
+        """Return True if Gemini circuit breaker is open (too many recent errors).
+
+        When open, callers should skip Gemini entirely and go to YandexGPT/Groq.
+        """
+        import time
+        import datetime
+
+        now = time.monotonic()
+
+        # Auto-reset at midnight (new day = fresh quota)
+        midnight_reset = datetime.datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        seconds_since_midnight = (datetime.datetime.now() - midnight_reset).total_seconds()
+        if seconds_since_midnight < 60:  # It's a new day — reset breaker
+            self._cb_error_times.clear()
+            self._cb_open_until = 0.0
+
+        # Still in penalty window?
+        if now < self._cb_open_until:
+            return True
+
+        # Purge errors older than the window
+        cutoff = now - self._CB_WINDOW_SECONDS
+        self._cb_error_times = [t for t in self._cb_error_times if t > cutoff]
+
+        return False  # Circuit is closed
+
+    def _cb_record_error(self) -> None:
+        """Record a Gemini error. Opens circuit if threshold exceeded."""
+        import time
+        now = time.monotonic()
+        self._cb_error_times.append(now)
+        cutoff = now - self._CB_WINDOW_SECONDS
+        recent = [t for t in self._cb_error_times if t > cutoff]
+        self._cb_error_times = recent
+
+        if len(recent) >= self._CB_MAX_ERRORS:
+            # Open circuit for 60 minutes
+            self._cb_open_until = now + 3600
+            logger.warning(
+                f"⚡ Gemini Circuit Breaker OPENED after {len(recent)} errors in 1h. "
+                f"Skipping Gemini for 60 min → YandexGPT/Groq will handle all requests."
+            )
+
+    def _resolve_gemini_model_names(self) -> list[str]:
+        """Return configured Gemini model ids, filtered against ListModels when possible."""
+        requested = self.config.gemini_model_names or DEFAULT_GEMINI_MODEL_NAMES
+
+        deduped: list[str] = []
+        seen = set()
+        for name in requested:
+            if name and name not in seen:
+                deduped.append(name)
+                seen.add(name)
+
+        try:
+            available = set()
+            for model in genai.list_models():
+                methods = getattr(model, "supported_generation_methods", []) or []
+                if "generateContent" not in methods:
+                    continue
+                model_name = getattr(model, "name", "")
+                if model_name.startswith("models/"):
+                    model_name = model_name.split("/", 1)[1]
+                if model_name:
+                    available.add(model_name)
+
+            matched = [name for name in deduped if name in available]
+            missing = [name for name in deduped if name not in available]
+            for name in missing:
+                logger.warning(f"Gemini model not available for generateContent, skipping: {name}")
+            if matched:
+                return matched
+            logger.warning("No configured Gemini models matched ListModels; using requested order without validation")
+        except Exception as e:
+            logger.warning(f"Gemini model validation via list_models failed: {e}")
+
+        return deduped
 
     async def check_relevance(self, text: str) -> bool:
         """
@@ -215,28 +364,71 @@ class AIRewriter:
             )
 
             if response and response.text:
-                answer = response.text.strip().upper()
-                is_relevant = "ДА" in answer
+                is_relevant = _parse_binary_answer(response.text)
+                if is_relevant is None:
+                    logger.warning(f"Relevance check returned ambiguous answer: {response.text!r}")
+                    return False
                 logger.info(f"Relevance check: {'✅ general' if is_relevant else '❌ regional'}")
                 return is_relevant
 
         except Exception as e:
             logger.error(f"Relevance check failed: {e}")
 
-        return True  # On error, let it through
+        return False  # On error, be conservative
+
+    async def check_urgency(self, text: str) -> bool:
+        """
+        Check if a news post is genuinely important/urgent for readers.
+        Returns True if worth publishing, False if it's noise/fluff.
+        """
+        if not self._gemini_model:
+            return True  # If no Gemini, let everything through
+
+        try:
+            prompt = URGENCY_PROMPT.format(text=text[:500])
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._gemini_model.generate_content(
+                    prompt,
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.1,
+                        max_output_tokens=10,
+                    ),
+                ),
+            )
+
+            if response and response.text:
+                is_urgent = _parse_binary_answer(response.text)
+                if is_urgent is None:
+                    logger.warning(f"Urgency check returned ambiguous answer: {response.text!r}")
+                    return False
+                logger.info(f"Urgency check: {'✅ important' if is_urgent else '❌ skipped (not urgent)'}")
+                return is_urgent
+
+        except Exception as e:
+            logger.error(f"Urgency check failed: {e}")
+
+        return False  # On error, be conservative
 
     async def rewrite(self, original_text: str) -> Tuple[Optional[str], str]:
         """
         Rewrite text using AI.
         
         Returns:
-            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'yandexgpt' | 'retext' | 'error')
+            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'groq' | 'yandexgpt' | 'retext' | 'error')
         """
         # Try Gemini first
         if self._gemini_model:
             result = await self._rewrite_with_gemini(original_text)
             if result:
                 return result, "gemini"
+
+        # Fallback to Groq
+        if self.config.groq_api_key:
+            result = await self._rewrite_with_groq(original_text)
+            if result:
+                return result, "groq"
 
         # Fallback to YandexGPT
         if self.config.yandex_api_key and self.config.yandex_folder_id:
@@ -253,15 +445,151 @@ class AIRewriter:
         logger.error("All AI rewrite engines failed")
         return None, "error"
 
-    async def ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
-        """Generic AI text generation with Gemini→YandexGPT fallback.
+    async def rewrite_full(
+        self, original_text: str
+    ) -> Tuple[Optional[str], str, list[str], list[str]]:
+        """Efficient all-in-one: rewrite + hashtags + photo keywords in ONE Gemini call.
+
+        Returns:
+            (rewritten_text or None, engine_name, hashtags_list, photo_keywords_list)
+
+        Falls back to calling rewrite()/generate_hashtags()/generate_keywords() separately
+        if the combined prompt fails.
+        """
+        import re as _re
+
+        COMBINED_PROMPT = f"""Ты — главный редактор Telegram-канала «Ижевск Сегодня».
+
+Твоя задача по данной новости — выполнить ТРИ действия сразу и вернуть ответ СТРОГО в указанном формате.
+
+ДЕЙСТВИЕ 1 — РЕРАЙТ:
+Полностью перепиши новость своим языком. Правила:
+- Заголовок (первая строка): чёткий, без кликбейта, до 80 символов
+- 2-5 абзацев, живой язык, НЕ канцелярит
+- Запрещено: «подписывайся», источник оригинала, реклама
+- Используй эмодзи уместно (1-2 штуки)
+
+ДЕЙСТВИЕ 2 — ХЭШТЕГИ:
+2-4 хэштега для новости. Обязательно #Ижевск или #Удмуртия если про регион.
+Допустимые тематические: #экономика #здоровье #образование #транспорт #жкх #общество #закон #технологии #политика
+
+ДЕЙСТВИЕ 3 — КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФОТО (на английском):
+2-3 слова для поиска стокового фото. Описывай ЛЮДЕЙ в СИТУАЦИИ (не абстракции, не «news», не «technology»).
+Примеры: "schoolchildren classroom", "doctor hospital patient", "road construction workers"
+
+ФОРМАТ ОТВЕТА (строго, ничего лишнего кроме этих блоков):
+РЕРАЙТ:
+<переписанный текст>
+ХЭШТЕГИ:
+<хэштеги через пробел>
+ФОТО:
+<ключевые слова через запятую>
+
+Исходная новость:
+{original_text}"""
+
+        # ── Try combined Gemini call ─────────────────────────────────────
+        if self._gemini_models:
+            loop = asyncio.get_event_loop()
+            for model_name, model in self._gemini_models:
+                try:
+                    _prompt = COMBINED_PROMPT
+                    _model = model
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: _model.generate_content(
+                            _prompt,
+                            generation_config=genai.GenerationConfig(
+                                temperature=0.85,
+                                max_output_tokens=2048,
+                            ),
+                            safety_settings=SAFETY_SETTINGS if _HAS_SAFETY else None,
+                        ),
+                    )
+
+                    if response and response.text:
+                        raw = response.text.strip()
+
+                        # Parse РЕРАЙТ block
+                        rewrite_match = _re.search(
+                            r'РЕРАЙТ:\s*\n(.*?)(?=\nХЭШТЕГИ:|$)',
+                            raw, _re.DOTALL
+                        )
+                        hashtag_match = _re.search(
+                            r'ХЭШТЕГИ:\s*\n(.*?)(?=\nФОТО:|$)',
+                            raw, _re.DOTALL
+                        )
+                        photo_match = _re.search(
+                            r'ФОТО:\s*\n(.*?)$',
+                            raw, _re.DOTALL
+                        )
+
+                        rewritten = rewrite_match.group(1).strip() if rewrite_match else None
+                        hashtags_raw = hashtag_match.group(1).strip() if hashtag_match else ""
+                        photo_raw = photo_match.group(1).strip() if photo_match else ""
+
+                        if rewritten and not self._is_refusal(rewritten) and len(rewritten) > 50:
+                            # Parse hashtags
+                            hashtags = [
+                                t.strip() for t in hashtags_raw.split()
+                                if t.strip().startswith("#")
+                            ][:4]
+
+                            # Parse photo keywords
+                            bad_keywords = {
+                                "news", "information", "article", "report", "update",
+                                "abstract", "concept", "technology", "digital", "modern",
+                                "bell", "ring", "sound", "alarm", "signal",
+                                "sport", "fitness", "gym", "workout", "climbing",
+                            }
+                            photo_keywords = [
+                                kw.strip().lower()
+                                for kw in photo_raw.split(",")
+                                if kw.strip() and kw.strip().lower() not in bad_keywords
+                            ][:3]
+
+                            uniqueness = self.calculate_uniqueness(original_text, rewritten)
+                            logger.info(
+                                f"rewrite_full [{model_name}]: OK — "
+                                f"uniqueness {uniqueness:.0%}, "
+                                f"{len(hashtags)} tags, {len(photo_keywords)} photo kw "
+                                f"(1 API call instead of 3)"
+                            )
+                            return rewritten, model_name, hashtags, photo_keywords
+
+                        logger.warning(f"rewrite_full [{model_name}]: parse failed or refusal, raw={raw[:100]}")
+
+                except Exception as e:
+                    err = str(e).lower()
+                    if "429" in err or "quota" in err or "resource" in err:
+                        logger.warning(f"rewrite_full [{model_name}]: quota hit, trying next model")
+                        continue
+                    logger.error(f"rewrite_full [{model_name}]: {e}")
+
+            # All models on current key exhausted — try next key before fallback
+            if self._switch_gemini_key():
+                logger.info("rewrite_full: switched to next Gemini key, retrying combined call")
+                # Recursive retry with the new key (only one level deep since
+                # _switch_gemini_key won't switch past the last key)
+                return await self.rewrite_full(original_text)
+
+        # ── Fallback: call old methods separately ────────────────────────
+        logger.warning("rewrite_full: combined call failed, falling back to separate methods")
+        rewritten, engine = await self.rewrite(original_text)
+        hashtags = await self.generate_hashtags(rewritten or original_text)
+        photo_keywords = await self.generate_keywords(original_text)
+        return rewritten, engine, hashtags, photo_keywords
+
+    async def ask_ai(self, prompt: str, temperature: float = 0.8, _key_switched: bool = False) -> Optional[str]:
+        """Generic AI text generation with Gemini→Groq→YandexGPT fallback.
 
         Used by ContentGenerator for rubric posts (weather, recipe, facts, etc.).
         """
         import re as _re
 
-        # Try Gemini first
-        if self._gemini_models:
+        # Try Gemini first — unless circuit breaker is open
+        if self._gemini_models and not self._gemini_circuit_open():
+            all_quota = True  # Track whether ALL failures were quota-related
             try:
                 loop = asyncio.get_event_loop()
                 for _name, model in self._gemini_models:
@@ -283,14 +611,37 @@ class AIRewriter:
                             text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
                             logger.info(f"ask_ai: Gemini/{_name} OK ({len(text)} chars)")
                             return text
+                        all_quota = False
                     except Exception as gem_err:
                         err_str = str(gem_err).lower()
                         if "quota" in err_str or "limit" in err_str or "429" in err_str:
                             logger.warning(f"ask_ai: {_name} quota hit, trying next")
+                            self._cb_record_error()
                             continue
                         logger.warning(f"ask_ai: {_name} error: {gem_err}")
+                        self._cb_record_error()
+                        all_quota = False
             except Exception as e:
                 logger.warning(f"ask_ai: Gemini failed: {e}")
+                self._cb_record_error()
+                all_quota = False
+
+            # All models on current key hit quota — try switching to next key
+            if all_quota and not _key_switched:
+                if self._switch_gemini_key():
+                    logger.info("ask_ai: switched to next Gemini key, retrying...")
+                    return await self.ask_ai(prompt, temperature, _key_switched=True)
+
+        # Fallback to Groq
+        if self.config.groq_api_key:
+            text = await self._groq_chat(
+                prompt=prompt,
+                temperature=temperature,
+                max_tokens=2048,
+            )
+            if text and len(text) > 20:
+                logger.info(f"ask_ai: Groq fallback OK ({len(text)} chars)")
+                return text
 
         # Fallback to YandexGPT
         if self.config.yandex_api_key and self.config.yandex_folder_id:
@@ -406,7 +757,11 @@ class AIRewriter:
                     logger.error(f"Gemini [{model_name}] error: {e}")
                     return None
 
-        logger.warning("All Gemini models exhausted (quota), falling back to YandexGPT...")
+        # All models on current key exhausted — try next key
+        if self._switch_gemini_key():
+            return await self._rewrite_with_gemini(text)
+
+        logger.warning("All Gemini API keys exhausted, falling back to YandexGPT...")
         return None
 
     async def _rewrite_with_yandexgpt(self, text: str) -> Optional[str]:
@@ -472,6 +827,62 @@ class AIRewriter:
             logger.error(f"YandexGPT rewrite failed: {e}")
 
         return None
+
+    async def _groq_chat(self, prompt: str, temperature: float, max_tokens: int) -> Optional[str]:
+        """Generic Groq chat completion helper (OpenAI-compatible endpoint)."""
+        if not self.config.groq_api_key:
+            return None
+
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.groq_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.config.groq_model,
+            "messages": [
+                {"role": "system", "content": "You are a concise Russian news editor for a Telegram channel."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        choices = data.get("choices", [])
+                        if not choices:
+                            return None
+                        message = choices[0].get("message", {}) or {}
+                        content = (message.get("content") or "").strip()
+                        return content or None
+                    error_text = await resp.text()
+                    logger.warning(f"Groq returned {resp.status}: {error_text[:200]}")
+        except Exception as e:
+            logger.warning(f"Groq request failed: {e}")
+
+        return None
+
+    async def _rewrite_with_groq(self, text: str) -> Optional[str]:
+        """Rewrite text using Groq API."""
+        prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+        rewritten = await self._groq_chat(prompt=prompt, temperature=0.9, max_tokens=2048)
+        if not rewritten:
+            return None
+        if self._is_refusal(rewritten):
+            logger.warning(f"Groq: refusal detected: {rewritten[:80]}")
+            return None
+        if len(rewritten) <= 50 or rewritten == text:
+            logger.warning("Groq: too short or identical")
+            return None
+
+        uniqueness = self.calculate_uniqueness(text, rewritten)
+        logger.info(f"Groq: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
+        return rewritten
 
     async def _rewrite_with_retext(self, text: str) -> Optional[str]:
         """Rewrite text using ReText.AI API (fallback)."""
@@ -799,6 +1210,58 @@ class AIRewriter:
 
         return True  # On any error → accept photo to avoid blocking publication
 
+
+    async def check_photo_relevance_safe(self, news_text: str, photo_url: str) -> bool:
+        """Safer photo relevance check using an ASCII-only prompt and strict parsing."""
+        if not self._gemini_model:
+            return False
+
+        try:
+            from io import BytesIO
+            import PIL.Image
+
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(photo_url) as resp:
+                    if resp.status != 200:
+                        return False
+                    image_bytes = await resp.read()
+
+            img = PIL.Image.open(BytesIO(image_bytes))
+            prompt = (
+                "Decide whether this photo is relevant for the news item.\n\n"
+                f"News text: {news_text[:300]}\n\n"
+                "Answer NO if the image is about a clearly different topic or is just a technical object shot that "
+                "would look wrong for a normal news post.\n"
+                "Answer YES if it is at least reasonably close to the topic or mood.\n\n"
+                "Reply with exactly one word: YES or NO."
+            )
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._gemini_model.generate_content(
+                    [prompt, img],
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.0,
+                        max_output_tokens=5,
+                    ),
+                ),
+            )
+
+            if response and response.text:
+                parsed = _parse_binary_answer(response.text)
+                if parsed is None:
+                    logger.warning(f"Photo relevance returned ambiguous answer: {response.text!r}")
+                    return False
+                return parsed
+
+        except ImportError:
+            logger.warning("PIL not available for photo relevance check")
+        except Exception as e:
+            logger.error(f"Safe photo relevance check failed: {e}")
+
+        return False
 
     @staticmethod
     def _extract_keywords_fallback(text: str) -> list[str]:

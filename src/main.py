@@ -156,6 +156,9 @@ async def main():
         if monitor_started:
             await monitor.stop()
         await db.close()
+        await vk_pub.close()                             # close aiohttp session → no "Unclosed" warning
+        if hasattr(max_pub, 'close'):
+            await max_pub.close()
         await bot.session.close()
         logger.info("Bot stopped. Goodbye!")
 

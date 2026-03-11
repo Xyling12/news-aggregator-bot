@@ -37,6 +37,7 @@ from src.utils import (
     clean_text,
     word_overlap,
     is_similar_to_any,
+    find_similar_candidate,
     detect_rubric,
     format_post,
     RUBRIC_MAP,
@@ -71,6 +72,114 @@ _bot: Optional[Bot] = None
 
 # Rate limiting: max 3 concurrent AI calls to avoid Gemini 429 errors
 _ai_semaphore = asyncio.Semaphore(3)
+
+LOCAL_GEO_KEYWORDS = [
+    "удмурт",
+    "ижевск",
+    "глазов",
+    "сарапул",
+    "воткинск",
+    "можга",
+    "камбарк",
+    "балезин",
+    "завьялов",
+    "удмуртск",
+]
+
+FEDERAL_NEWS_KEYWORDS = [
+    "федеральн",
+    "госдум",
+    "государственн",
+    "правительств",
+    "минфин",
+    "центробанк",
+    "центральн банк",
+    "ключев",
+    "пенси",
+    "налог",
+    "пособи",
+    "мрот",
+    "жкх тариф",
+    "тариф",
+    "инфляц",
+    "ставк",
+]
+
+RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
+
+
+NON_LOCAL_REGION_KEYWORDS = [
+    # Explicit non-local cities/regions that should not pass as Izhevsk-only updates.
+    "сочи",
+    "краснодар",
+    "краснодарск",
+    "адлер",
+    "кубан",
+    "анап",
+    "геленджик",
+    "новороссийск",
+    "ростов",
+    "белгород",
+    "курск",
+    "воронеж",
+    "брянск",
+    "твер",
+    "москва",
+    "санкт-петербург",
+    "петербург",
+    "спб",
+]
+
+
+def _normalize_geo_text(text: str) -> str:
+    """Remove hashtag-only lines so region checks use the main body."""
+    return re.sub(r"(?m)^\s*#.*$", "", text.lower()).strip()
+
+
+def _has_local_geo(text: str) -> bool:
+    normalized = _normalize_geo_text(text)
+    return any(keyword in normalized for keyword in LOCAL_GEO_KEYWORDS)
+
+
+def _looks_federal_news(text: str) -> bool:
+    normalized = _normalize_geo_text(text)
+    return any(keyword in normalized for keyword in FEDERAL_NEWS_KEYWORDS)
+
+
+def _has_non_local_geo(text: str) -> bool:
+    normalized = _normalize_geo_text(text)
+    return any(keyword in normalized for keyword in NON_LOCAL_REGION_KEYWORDS)
+
+
+def _should_reject_by_geo(
+    *,
+    is_local_source: bool,
+    has_local_geo: bool,
+    looks_federal: bool,
+    has_non_local_geo: bool,
+) -> bool:
+    """Geo gate used before rewrite/publish."""
+    if has_local_geo or looks_federal:
+        return False
+    if not is_local_source:
+        return True
+    # Local sources are allowed without explicit geo markers,
+    # except when text clearly points to another region.
+    return has_non_local_geo
+
+
+def _is_breaking_candidate(
+    text: str,
+    *,
+    is_radar_source: bool,
+    has_geo: bool,
+    breaking_keywords: list[str],
+) -> bool:
+    """Return True only for local breaking posts."""
+    text_lower = text.lower()
+    return (is_radar_source and has_geo) or (
+        has_geo and any(kw in text_lower for kw in breaking_keywords)
+    )
 
 
 def is_admin(user_id: int) -> bool:
@@ -191,6 +300,134 @@ async def cmd_cancel(message: Message, state: FSMContext):
     """Cancel any active FSM state."""
     await state.clear()
     await message.answer("❌ Отменено.")
+
+
+@router.message(Command("test_ai"))
+async def cmd_test_ai(message: Message):
+    """Admin: test all AI engines and report which ones work."""
+    if not is_admin(message.from_user.id):
+        return
+    if not _rewriter:
+        await message.answer("❌ AI rewriter не инициализирован.")
+        return
+
+    test_prompt = "Напиши одно короткое предложение: «Ижевск — столица Удмуртии»."
+    result_lines = ["🧪 <b>Тест AI движков</b>\n"]
+
+    # Test Gemini
+    import time
+    if _rewriter._gemini_models:
+        if _rewriter._gemini_circuit_open():
+            result_lines.append("⚡ <b>Gemini</b> — Circuit Breaker ОТКРЫТ (слишком много ошибок за час)")
+        else:
+            try:
+                t0 = time.monotonic()
+                import asyncio as _aio
+                loop = _aio.get_event_loop()
+                name, model = _rewriter._gemini_models[0]
+                import google.generativeai as _genai
+                resp = await loop.run_in_executor(
+                    None,
+                    lambda: model.generate_content(
+                        test_prompt,
+                        generation_config=_genai.GenerationConfig(max_output_tokens=50),
+                    ),
+                )
+                elapsed = time.monotonic() - t0
+                if resp and resp.text:
+                    result_lines.append(f"✅ <b>Gemini/{name}</b> — работает ({elapsed:.1f}s)")
+                    result_lines.append(f"   → {resp.text.strip()[:80]}")
+                else:
+                    result_lines.append(f"⚠️ <b>Gemini/{name}</b> — пустой ответ ({elapsed:.1f}s)")
+            except Exception as e:
+                result_lines.append(f"❌ <b>Gemini</b> — ошибка: {str(e)[:100]}")
+    else:
+        result_lines.append("❌ <b>Gemini</b> — не настроен (нет GEMINI_API_KEYS)")
+
+    result_lines.append("")
+
+    # Test YandexGPT
+    if _rewriter.config.yandex_api_key and _rewriter.config.yandex_folder_id:
+        try:
+            import aiohttp as _aiohttp
+            t0 = time.monotonic()
+            url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+            headers = {
+                "Authorization": f"Api-Key {_rewriter.config.yandex_api_key}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "modelUri": f"gpt://{_rewriter.config.yandex_folder_id}/yandexgpt-lite/latest",
+                "completionOptions": {"stream": False, "temperature": 0.3, "maxTokens": "50"},
+                "messages": [{"role": "user", "text": test_prompt}],
+            }
+            async with _aiohttp.ClientSession() as session:
+                async with session.post(url, json=body, headers=headers,
+                                        timeout=_aiohttp.ClientTimeout(total=20)) as resp:
+                    elapsed = time.monotonic() - t0
+                    if resp.status == 200:
+                        data = await resp.json()
+                        text = data.get("result", {}).get("alternatives", [{}])[0] \
+                                   .get("message", {}).get("text", "")
+                        result_lines.append(f"✅ <b>YandexGPT</b> — работает ({elapsed:.1f}s)")
+                        result_lines.append(f"   → {text.strip()[:80]}")
+                    else:
+                        body_text = await resp.text()
+                        result_lines.append(
+                            f"❌ <b>YandexGPT</b> — HTTP {resp.status} ({elapsed:.1f}s)\n"
+                            f"   {body_text[:120]}"
+                        )
+        except Exception as e:
+            result_lines.append(f"❌ <b>YandexGPT</b> — ошибка: {str(e)[:100]}")
+    else:
+        result_lines.append("⚠️ <b>YandexGPT</b> — не настроен (нет YANDEX_API_KEY / YANDEX_FOLDER_ID)")
+
+    await message.answer("\n".join(result_lines), parse_mode=ParseMode.HTML)
+
+
+@router.message(Command("aistats"))
+async def cmd_aistats(message: Message):
+    """Admin: show AI circuit breaker status and error stats."""
+    if not is_admin(message.from_user.id):
+        return
+    if not _rewriter:
+        await message.answer("❌ AI rewriter не инициализирован.")
+        return
+
+    import time
+    now = time.monotonic()
+    window = _rewriter._CB_WINDOW_SECONDS
+
+    # Count recent errors
+    cutoff = now - window
+    recent_errors = [t for t in _rewriter._cb_error_times if t > cutoff]
+    max_errors = _rewriter._CB_MAX_ERRORS
+
+    if _rewriter._gemini_circuit_open():
+        remaining = max(0, _rewriter._cb_open_until - now)
+        cb_status = f"⚡ ОТКРЫТ — сброс через {int(remaining // 60)} мин {int(remaining % 60)} с"
+    else:
+        cb_status = "✅ ЗАКРЫТ (Gemini работает в штатном режиме)"
+
+    # Gemini keys status
+    keys = _rewriter.config.gemini_api_keys or []
+    current_key = _rewriter._current_key_index + 1
+
+    lines = [
+        "📊 <b>AI Statistics</b>\n",
+        f"🔥 <b>Circuit Breaker:</b> {cb_status}",
+        f"⚠️ <b>Ошибок Gemini (за 1ч):</b> {len(recent_errors)}/{max_errors}",
+        "",
+        f"🔑 <b>Gemini API ключи:</b> {current_key}/{len(keys)} активен",
+        f"🤖 <b>Модели Gemini:</b> {len(_rewriter._gemini_models)} загружено",
+        "",
+        f"🇷🇺 <b>YandexGPT:</b> {'✅ ключ есть' if _rewriter.config.yandex_api_key else '❌ нет ключа'}",
+        "",
+        "💡 Используй /test_ai для живого теста всех движков",
+    ]
+
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
 
 
 @router.message(SendNewsStates.waiting_for_news)
@@ -935,6 +1172,22 @@ def _is_similar_to_any(text: str, candidates: list) -> bool:
     return is_similar_to_any(text, candidates, _rewriter)
 
 
+def _find_similar_match(text: str, candidates: list, *, queued: bool = False):
+    """Return duplicate details for logging and threshold tuning."""
+    if queued:
+        return find_similar_candidate(
+            text,
+            candidates,
+            _rewriter,
+            similarity_threshold=0.83,
+            overlap_threshold=0.58,
+            require_both=True,
+            hard_similarity_threshold=0.96,
+            hard_overlap_threshold=0.86,
+        )
+    return find_similar_candidate(text, candidates, _rewriter)
+
+
 async def _send_review_post(chat_id: int, post: dict):
     """Send a post for admin review with moderation buttons."""
     original = _escape_html(_truncate(post["original_text"], 300))
@@ -1164,6 +1417,14 @@ async def process_new_post(post_id: int):
         "поспешите приобрести", "успейте купить", "не упустите свой шанс",
         "новинки коллекции", "коллаборации первого уровня",
         "подробности — читайте в карточках",
+        # Донат-посты и призывы к пожертвованиям
+        "радар работает благодаря вам", "поддержите любой суммой",
+        "даже небольшой донат", "мы не размещаем рекламу",
+        "проект держится на поддержке", "задонатить",
+        # Саморекламные посты источника
+        "подписаться в vk", "подписаться в тг", "подписаться в tg",
+        "прислать новость", "telegram заблокируют", "телеграм заблокируют",
+        "не реклама!!!", "не реклама!", "это не реклама",
     ]
     if any(w in text_lower for w in _HARD_AD_WORDS):
         await _db.update_post_status(post_id, "rejected")
@@ -1181,24 +1442,42 @@ async def process_new_post(post_id: int):
 
     # Step 0b: Relevance filter for federal channels
     source = post["source_channel"].lower()
-    local_keywords = ["izhevsk", "izh", "udm", "удмурт", "ижевск", "18"]
-    is_local = any(kw in source for kw in local_keywords)
+
+    # Channels whose username contains these fragments are treated as local without geo-check
+    _LOCAL_SOURCE_KEYWORDS = [
+        "izhevsk", "izh", "udm", "удмурт", "ижевск", "18",
+        "radar", "vrv", "izhlife", "udm18", "ижlife", "иж18",
+        "радар", "ижевск", "удмуртия", "вятка", "ижнет",
+    ]
+    # Fully-trusted channels: always pass without geo-filter regardless of username
+    _TRUSTED_LOCAL_CHANNELS = [
+        "vrv_radar", "vrv radar", "izhevsk_today", "izhlife",
+        "udmurtia_news", "izh_radar", "radar18",
+    ]
+
+    is_local = (
+        any(kw in source for kw in _LOCAL_SOURCE_KEYWORDS)
+        or any(trusted in source for trusted in _TRUSTED_LOCAL_CHANNELS)
+    )
+    is_radar_source = any(m in source for m in RADAR_SOURCE_MARKERS)
+    has_geo = _has_local_geo(original_text)
+    looks_federal = _looks_federal_news(original_text)
+    has_non_local_geo = _has_non_local_geo(original_text)
+
+    if _should_reject_by_geo(
+        is_local_source=is_local,
+        has_local_geo=has_geo,
+        looks_federal=looks_federal,
+        has_non_local_geo=has_non_local_geo,
+    ):
+        await _db.update_post_status(post_id, "rejected")
+        if is_local and has_non_local_geo:
+            logger.info(f"Post #{post_id} rejected: local source but non-local geo markers in text")
+        else:
+            logger.info(f"Post #{post_id} rejected: no local geo markers in text")
+        return
 
     if not is_local:
-        # Hard geo-filter: reject immediately if NO Izhevsk/Udmurtia keywords in text
-        _GEO_KEYWORDS = [
-            "удмурт", "ижевск", "глазов", "сарапул", "воткинск", "можга",
-            "ижевске", "ижевска", "удмуртии", "удмуртия", "удмуртская",
-        ]
-        has_geo = any(kw in text_lower for kw in _GEO_KEYWORDS)
-        if not has_geo:
-            await _db.update_post_status(post_id, "rejected")
-            logger.info(
-                f"Post #{post_id} rejected: no Izhevsk/Udmurtia keywords "
-                f"in non-local channel @{source}"
-            )
-            return
-
         # Secondary AI check for nuanced relevance (only if geo check passed)
         is_relevant = await _rewriter.check_relevance(original_text)
         if not is_relevant:
@@ -1209,28 +1488,41 @@ async def process_new_post(post_id: int):
     # Step 0c: Deduplication — smart two-tier check
     # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
     published_texts = await _db.get_texts_by_status(["published"], hours=12)
-    if _is_similar_to_any(original_text, published_texts):
+    published_match = _find_similar_match(original_text, published_texts)
+    if published_match:
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: similar to published post")
+        logger.info(
+            f"Post #{post_id} rejected: similar to published post "
+            f"(similarity={published_match['similarity']:.2f}, overlap={published_match['overlap']:.2f})"
+        )
         return
 
     # Tier 2: Compare against QUEUED posts (pending/rewriting/approved) — first-in-queue wins, later duplicates rejected
-    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=24)
-    if _is_similar_to_any(original_text, queued_texts):
+    queued_texts = await _db.get_texts_by_status(["pending", "rewriting", "approved"], hours=12)
+    queued_match = _find_similar_match(original_text, queued_texts, queued=True)
+    if queued_match:
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: similar post already in queue")
+        logger.info(
+            f"Post #{post_id} rejected: similar post already in queue "
+            f"(similarity={queued_match['similarity']:.2f}, overlap={queued_match['overlap']:.2f})"
+        )
         return
 
-    # Step 0d: Breaking news detection — auto-publish without moderation
-    # Radar/БПЛА channels always treated as breaking (air-defense alerts, etc.)
-    _RADAR_SOURCE_MARKERS = ["радар", "radar", "бпла", "воздух", "тревог"]
-    is_radar_source = any(m in source for m in _RADAR_SOURCE_MARKERS)
-    is_breaking = is_radar_source or any(kw in text_lower for kw in _config.breaking_keywords)
+    # Step 0d: Breaking news detection — auto-publish without moderation.
+    # Radar source alone is not enough: breaking mode is only for posts with local geo markers.
+    is_breaking = _is_breaking_candidate(
+        original_text,
+        is_radar_source=is_radar_source,
+        has_geo=has_geo,
+        breaking_keywords=_config.breaking_keywords,
+    )
 
-    # Step 1: AI Rewrite (rate-limited to 3 concurrent requests)
+    # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
     await _db.update_post_status(post_id, "rewriting")
+    _ai_hashtags: list = []
+    _ai_photo_keywords: list = []
     async with _ai_semaphore:
-        rewritten, engine = await _rewriter.rewrite(original_text)
+        rewritten, engine, _ai_hashtags, _ai_photo_keywords = await _rewriter.rewrite_full(original_text)
 
     if rewritten:
         rewritten = _clean_text(rewritten)  # Clean AI output too
@@ -1250,57 +1542,67 @@ async def process_new_post(post_id: int):
     # Step 2: Deduplicate by REWRITTEN text BEFORE formatting
     # (must be done before format_post adds the same footer/hashtags to every post)
     published_rewritten = await _db.get_rewritten_texts_by_status(["published"], hours=12)
-    if _is_similar_to_any(rewritten, published_rewritten):
+    rewritten_match = _find_similar_match(rewritten, published_rewritten)
+    if rewritten_match:
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: rewritten text too similar to recently published post")
+        logger.info(
+            f"Post #{post_id} rejected: rewritten text too similar to recently published post "
+            f"(similarity={rewritten_match['similarity']:.2f}, overlap={rewritten_match['overlap']:.2f})"
+        )
         return
 
-    # Step 2.5: Generate hashtags
-    hashtags = await _rewriter.generate_hashtags(rewritten)
-
-    # Step 2.6: Format post with premium template
-    rewritten = _format_post(rewritten, hashtags)
+    # Step 2.5: Format post (hashtags already from rewrite_full)
+    rewritten = _format_post(rewritten, _ai_hashtags)
 
     await _db.update_post_rewrite(post_id, rewritten)
 
-    # Step 3: Watermark detection on original photo (FIRST, before stock search)
-    has_watermark = False
-    if post["media_type"] == "photo" and post.get("media_local_path"):
-        _has_wm, confidence = _media_processor.detect_watermark(post["media_local_path"])
-        if _has_wm:
-            has_watermark = True
-            await _db.update_post_media(post_id, has_watermark=True)
-            logger.info(f"Post #{post_id}: watermark detected (confidence: {confidence:.2f})")
-
-    # Step 3b: Find stock photo.
-    # Always search; mandatory if watermark detected (must replace the original).
-    # Fallback to a curated Izhevsk photo if no stock found.
-    _IZHEVSK_FALLBACK_PHOTOS = [
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Izhevsk_letom.jpg/1280px-Izhevsk_letom.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Izhevsk_city_centre.jpg/1280px-Izhevsk_city_centre.jpg",
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Izhevsk_pond.jpg/1280px-Izhevsk_pond.jpg",
-    ]
+    # Step 3b: Smart photo strategy (no Gemini call — saves quota)
+    #
+    # Priority:
+    #   1. Post has original photo WITHOUT watermark → use it as-is, skip stock search
+    #   2. Post has original photo WITH watermark → replace with stock
+    #   3. Post has no photo → search stock only if keywords are highly specific
+    #   4. No suitable photo found → publish text-only (better than generic stock)
     try:
-        keywords = await _rewriter.generate_keywords(original_text)
         stock_url = None
-        if keywords:
-            stock_photos = await _media_processor.search_stock_photo(keywords, count=5)
-            # AI relevance check — pick first photo that actually matches the news topic
-            for candidate in stock_photos[:3]:
-                url = candidate["url"]
-                is_relevant = await _rewriter.check_photo_relevance(original_text, url)
-                if is_relevant:
-                    stock_url = url
-                    logger.info(f"Post #{post_id}: stock photo approved for '{' '.join(keywords)}'")
-                    break
-            if not stock_url and stock_photos:
-                logger.info(f"Post #{post_id}: all stock photos failed relevance check — publishing without photo")
+        has_original_clean = (
+            post["media_type"] == "photo"
+            and post.get("media_local_path")
+            and not has_watermark
+        )
 
-        if not stock_url and (has_watermark or post["media_type"] != "photo"):
-            # No stock found but we must replace: use a random Izhevsk fallback
-            import random
-            stock_url = random.choice(_IZHEVSK_FALLBACK_PHOTOS)
-            logger.info(f"Post #{post_id}: using Izhevsk fallback photo")
+        if has_original_clean:
+            # Original photo from source — best quality, keep it
+            logger.info(f"Post #{post_id}: using original source photo (no watermark)")
+        else:
+            # Need stock: either watermark replacement or no photo at all
+            keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
+
+            if keywords and len(keywords) >= 2:
+                stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
+
+                if stock_photos:
+                    # Take FIRST result — Wikimedia already sorts by relevance
+                    # Skip if description doesn't share ANY keyword (basic sanity check)
+                    best = stock_photos[0]
+                    desc_lower = (best.get("description", "") + " " + " ".join(keywords)).lower()
+                    # Accept if ≥1 keyword appears in description or title
+                    kw_match = any(kw.lower() in desc_lower for kw in keywords[:3])
+                    if kw_match or has_watermark:
+                        stock_url = best["url"]
+                        logger.info(
+                            f"Post #{post_id}: stock photo selected "
+                            f"(kw_match={kw_match}, keywords={keywords[:3]})"
+                        )
+                    else:
+                        logger.info(
+                            f"Post #{post_id}: stock photo description mismatch — "
+                            f"publishing text-only (keywords={keywords[:3]})"
+                        )
+                else:
+                    logger.info(f"Post #{post_id}: no stock photos found — publishing text-only")
+            else:
+                logger.info(f"Post #{post_id}: insufficient keywords for stock search — text-only")
 
         if stock_url:
             await _db.update_post_media(post_id, replacement_url=stock_url)
