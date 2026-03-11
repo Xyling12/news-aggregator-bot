@@ -205,6 +205,16 @@ class AIRewriter:
         self._gemini_model = None
         self._gemini_models = []  # Fallback models list
         self._current_key_index = 0  # Index of active API key
+
+        # ── Circuit Breaker — auto-bypass Gemini when it keeps failing ─────
+        # After _CB_MAX_ERRORS errors within _CB_WINDOW_SECONDS, circuit OPENS:
+        # all requests go straight to YandexGPT/Groq, saving time and quota.
+        # Resets automatically at midnight (new day = fresh quota).
+        self._cb_error_times: list = []      # timestamps of recent Gemini errors
+        self._CB_MAX_ERRORS: int = 3         # trip after this many errors
+        self._CB_WINDOW_SECONDS: int = 3600  # within this window (1 hour)
+        self._cb_open_until: float = 0.0     # monotonic time when circuit re-closes
+
         self._setup_gemini()
 
     def _setup_gemini(self):
@@ -248,6 +258,52 @@ class AIRewriter:
         logger.warning(f"🔑 Switching to Gemini API key #{next_index + 1}/{len(keys)}")
         self._setup_gemini()
         return bool(self._gemini_models)
+
+    def _gemini_circuit_open(self) -> bool:
+        """Return True if Gemini circuit breaker is open (too many recent errors).
+
+        When open, callers should skip Gemini entirely and go to YandexGPT/Groq.
+        """
+        import time
+        import datetime
+
+        now = time.monotonic()
+
+        # Auto-reset at midnight (new day = fresh quota)
+        midnight_reset = datetime.datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        seconds_since_midnight = (datetime.datetime.now() - midnight_reset).total_seconds()
+        if seconds_since_midnight < 60:  # It's a new day — reset breaker
+            self._cb_error_times.clear()
+            self._cb_open_until = 0.0
+
+        # Still in penalty window?
+        if now < self._cb_open_until:
+            return True
+
+        # Purge errors older than the window
+        cutoff = now - self._CB_WINDOW_SECONDS
+        self._cb_error_times = [t for t in self._cb_error_times if t > cutoff]
+
+        return False  # Circuit is closed
+
+    def _cb_record_error(self) -> None:
+        """Record a Gemini error. Opens circuit if threshold exceeded."""
+        import time
+        now = time.monotonic()
+        self._cb_error_times.append(now)
+        cutoff = now - self._CB_WINDOW_SECONDS
+        recent = [t for t in self._cb_error_times if t > cutoff]
+        self._cb_error_times = recent
+
+        if len(recent) >= self._CB_MAX_ERRORS:
+            # Open circuit for 60 minutes
+            self._cb_open_until = now + 3600
+            logger.warning(
+                f"⚡ Gemini Circuit Breaker OPENED after {len(recent)} errors in 1h. "
+                f"Skipping Gemini for 60 min → YandexGPT/Groq will handle all requests."
+            )
 
     def _resolve_gemini_model_names(self) -> list[str]:
         """Return configured Gemini model ids, filtered against ListModels when possible."""
@@ -531,8 +587,8 @@ class AIRewriter:
         """
         import re as _re
 
-        # Try Gemini first — loop through all models on the current key
-        if self._gemini_models:
+        # Try Gemini first — unless circuit breaker is open
+        if self._gemini_models and not self._gemini_circuit_open():
             all_quota = True  # Track whether ALL failures were quota-related
             try:
                 loop = asyncio.get_event_loop()
@@ -560,11 +616,14 @@ class AIRewriter:
                         err_str = str(gem_err).lower()
                         if "quota" in err_str or "limit" in err_str or "429" in err_str:
                             logger.warning(f"ask_ai: {_name} quota hit, trying next")
+                            self._cb_record_error()
                             continue
                         logger.warning(f"ask_ai: {_name} error: {gem_err}")
+                        self._cb_record_error()
                         all_quota = False
             except Exception as e:
                 logger.warning(f"ask_ai: Gemini failed: {e}")
+                self._cb_record_error()
                 all_quota = False
 
             # All models on current key hit quota — try switching to next key
