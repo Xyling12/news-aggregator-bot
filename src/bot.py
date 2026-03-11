@@ -302,6 +302,134 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await message.answer("❌ Отменено.")
 
 
+@router.message(Command("test_ai"))
+async def cmd_test_ai(message: Message):
+    """Admin: test all AI engines and report which ones work."""
+    if not is_admin(message.from_user.id):
+        return
+    if not _rewriter:
+        await message.answer("❌ AI rewriter не инициализирован.")
+        return
+
+    test_prompt = "Напиши одно короткое предложение: «Ижевск — столица Удмуртии»."
+    result_lines = ["🧪 <b>Тест AI движков</b>\n"]
+
+    # Test Gemini
+    import time
+    if _rewriter._gemini_models:
+        if _rewriter._gemini_circuit_open():
+            result_lines.append("⚡ <b>Gemini</b> — Circuit Breaker ОТКРЫТ (слишком много ошибок за час)")
+        else:
+            try:
+                t0 = time.monotonic()
+                import asyncio as _aio
+                loop = _aio.get_event_loop()
+                name, model = _rewriter._gemini_models[0]
+                import google.generativeai as _genai
+                resp = await loop.run_in_executor(
+                    None,
+                    lambda: model.generate_content(
+                        test_prompt,
+                        generation_config=_genai.GenerationConfig(max_output_tokens=50),
+                    ),
+                )
+                elapsed = time.monotonic() - t0
+                if resp and resp.text:
+                    result_lines.append(f"✅ <b>Gemini/{name}</b> — работает ({elapsed:.1f}s)")
+                    result_lines.append(f"   → {resp.text.strip()[:80]}")
+                else:
+                    result_lines.append(f"⚠️ <b>Gemini/{name}</b> — пустой ответ ({elapsed:.1f}s)")
+            except Exception as e:
+                result_lines.append(f"❌ <b>Gemini</b> — ошибка: {str(e)[:100]}")
+    else:
+        result_lines.append("❌ <b>Gemini</b> — не настроен (нет GEMINI_API_KEYS)")
+
+    result_lines.append("")
+
+    # Test YandexGPT
+    if _rewriter.config.yandex_api_key and _rewriter.config.yandex_folder_id:
+        try:
+            import aiohttp as _aiohttp
+            t0 = time.monotonic()
+            url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+            headers = {
+                "Authorization": f"Api-Key {_rewriter.config.yandex_api_key}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "modelUri": f"gpt://{_rewriter.config.yandex_folder_id}/yandexgpt-lite/latest",
+                "completionOptions": {"stream": False, "temperature": 0.3, "maxTokens": "50"},
+                "messages": [{"role": "user", "text": test_prompt}],
+            }
+            async with _aiohttp.ClientSession() as session:
+                async with session.post(url, json=body, headers=headers,
+                                        timeout=_aiohttp.ClientTimeout(total=20)) as resp:
+                    elapsed = time.monotonic() - t0
+                    if resp.status == 200:
+                        data = await resp.json()
+                        text = data.get("result", {}).get("alternatives", [{}])[0] \
+                                   .get("message", {}).get("text", "")
+                        result_lines.append(f"✅ <b>YandexGPT</b> — работает ({elapsed:.1f}s)")
+                        result_lines.append(f"   → {text.strip()[:80]}")
+                    else:
+                        body_text = await resp.text()
+                        result_lines.append(
+                            f"❌ <b>YandexGPT</b> — HTTP {resp.status} ({elapsed:.1f}s)\n"
+                            f"   {body_text[:120]}"
+                        )
+        except Exception as e:
+            result_lines.append(f"❌ <b>YandexGPT</b> — ошибка: {str(e)[:100]}")
+    else:
+        result_lines.append("⚠️ <b>YandexGPT</b> — не настроен (нет YANDEX_API_KEY / YANDEX_FOLDER_ID)")
+
+    await message.answer("\n".join(result_lines), parse_mode=ParseMode.HTML)
+
+
+@router.message(Command("aistats"))
+async def cmd_aistats(message: Message):
+    """Admin: show AI circuit breaker status and error stats."""
+    if not is_admin(message.from_user.id):
+        return
+    if not _rewriter:
+        await message.answer("❌ AI rewriter не инициализирован.")
+        return
+
+    import time
+    now = time.monotonic()
+    window = _rewriter._CB_WINDOW_SECONDS
+
+    # Count recent errors
+    cutoff = now - window
+    recent_errors = [t for t in _rewriter._cb_error_times if t > cutoff]
+    max_errors = _rewriter._CB_MAX_ERRORS
+
+    if _rewriter._gemini_circuit_open():
+        remaining = max(0, _rewriter._cb_open_until - now)
+        cb_status = f"⚡ ОТКРЫТ — сброс через {int(remaining // 60)} мин {int(remaining % 60)} с"
+    else:
+        cb_status = "✅ ЗАКРЫТ (Gemini работает в штатном режиме)"
+
+    # Gemini keys status
+    keys = _rewriter.config.gemini_api_keys or []
+    current_key = _rewriter._current_key_index + 1
+
+    lines = [
+        "📊 <b>AI Statistics</b>\n",
+        f"🔥 <b>Circuit Breaker:</b> {cb_status}",
+        f"⚠️ <b>Ошибок Gemini (за 1ч):</b> {len(recent_errors)}/{max_errors}",
+        "",
+        f"🔑 <b>Gemini API ключи:</b> {current_key}/{len(keys)} активен",
+        f"🤖 <b>Модели Gemini:</b> {len(_rewriter._gemini_models)} загружено",
+        "",
+        f"🇷🇺 <b>YandexGPT:</b> {'✅ ключ есть' if _rewriter.config.yandex_api_key else '❌ нет ключа'}",
+        "",
+        "💡 Используй /test_ai для живого теста всех движков",
+    ]
+
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+
 @router.message(SendNewsStates.waiting_for_news)
 async def process_user_news(message: Message, state: FSMContext):
     """Process user-submitted news and forward to admins."""
