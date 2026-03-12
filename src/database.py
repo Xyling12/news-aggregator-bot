@@ -307,6 +307,30 @@ class Database:
         rows = await cursor.fetchall()
         return [row["rewritten_text"] for row in rows]
 
+    async def has_recent_topic_post(self, keywords: List[str], hours: int = 4) -> bool:
+        """Return True if any published/approved/queued post in the last N hours
+        contains at least one of the given keywords in its original or rewritten text.
+        Used for topic-based cooldowns (e.g. weather: no more than once per 4 hours).
+        """
+        placeholders = " OR ".join(
+            ["(original_text LIKE ? OR rewritten_text LIKE ?)"] * len(keywords)
+        )
+        params = []
+        for kw in keywords:
+            like = f"%{kw}%"
+            params += [like, like]
+        params.append(f"-{hours} hours")
+        cursor = await self._db.execute(
+            f"""SELECT 1 FROM posts
+               WHERE ({placeholders})
+               AND status IN ('published', 'approved', 'pending', 'rewriting')
+               AND created_at > datetime('now', ?)
+               LIMIT 1""",
+            params,
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
     # ── Settings ─────────────────────────────────────────────────────────
 
     async def get_setting(self, key: str, default: str = None) -> Optional[str]:

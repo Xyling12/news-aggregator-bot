@@ -1438,9 +1438,16 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: ad/spam (matched: {', '.join(ad_matches[:3])})")
         return
 
+    # Step 0b: Topic cooldown — prevent same-topic flood
+    _WEATHER_KEYWORDS = ["погод", "температур", "прогноз", "осадк", "гололед", "мороз"]
+    text_lower_w = original_text.lower()
+    if sum(1 for kw in _WEATHER_KEYWORDS if kw in text_lower_w) >= 2:
+        if await _db.has_recent_topic_post(_WEATHER_KEYWORDS[:4], hours=4):
+            await _db.update_post_status(post_id, "rejected")
+            logger.info(f"Post #{post_id} rejected: weather cooldown (duplicate weather post in last 4h)")
+            return
 
-
-    # Step 0b: Relevance filter for federal channels
+    # Step 0c: Relevance filter for federal channels
     source = post["source_channel"].lower()
 
     # Channels whose username contains these fragments are treated as local without geo-check
