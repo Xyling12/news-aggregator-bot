@@ -1464,26 +1464,26 @@ async def process_new_post(post_id: int):
     looks_federal = _looks_federal_news(original_text)
     has_non_local_geo = _has_non_local_geo(original_text)
 
-    if _should_reject_by_geo(
-        is_local_source=is_local,
-        has_local_geo=has_geo,
-        looks_federal=looks_federal,
-        has_non_local_geo=has_non_local_geo,
-    ):
-        await _db.update_post_status(post_id, "rejected")
-        if is_local and has_non_local_geo:
-            logger.info(f"Post #{post_id} rejected: local source but non-local geo markers in text")
-        else:
-            logger.info(f"Post #{post_id} rejected: no local geo markers in text")
-        return
-
-    if not is_local:
-        # Secondary AI check for nuanced relevance (only if geo check passed)
-        is_relevant = await _rewriter.check_relevance(original_text)
-        if not is_relevant:
+    if is_local:
+        # Local source: apply geo filter — reject only if text explicitly points to another region
+        if has_non_local_geo and not has_local_geo:
             await _db.update_post_status(post_id, "rejected")
-            logger.info(f"Post #{post_id} rejected: regional news from federal channel @{source}")
+            logger.info(f"Post #{post_id} rejected: local source but non-local geo markers in text")
             return
+    else:
+        # Federal/non-local source: skip hard geo filter, use AI relevance check instead.
+        # Hard geo filter was too strict — it blocked international/political/consumer news
+        # (e.g. "Аферисты продают БАДы", "Ким Чен Ын") that are relevant to all readers.
+        if has_local_geo or looks_federal:
+            # Fast-path: obvious local/federal relevance — skip AI call
+            pass
+        else:
+            # Use AI to decide relevance for everything else
+            is_relevant = await _rewriter.check_relevance(original_text)
+            if not is_relevant:
+                await _db.update_post_status(post_id, "rejected")
+                logger.info(f"Post #{post_id} rejected: not relevant per AI check (federal channel @{source})")
+                return
 
     # Step 0c: Deduplication — smart two-tier check
     # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
