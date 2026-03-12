@@ -1575,7 +1575,7 @@ async def process_new_post(post_id: int):
         has_original_clean = (
             post["media_type"] == "photo"
             and post.get("media_local_path")
-            and not has_watermark
+            and not post.get("has_watermark")
         )
 
         if has_original_clean:

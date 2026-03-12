@@ -249,6 +249,7 @@ class ContentScheduler:
         # IMPORTANT: Telegram caption limit is 1024 chars. For long posts (5 facts, history, etc.)
         # we send photo first (no caption), then full text as a separate message.
         CAPTION_LIMIT = 900  # safe threshold below 1024
+        msg = None
         try:
             if photo_url:
                 use_caption = len(text) <= CAPTION_LIMIT

@@ -2,9 +2,10 @@
 Media Processor — handles watermark detection, media downloading, and stock photo search.
 
 Stock photo priority:
-  1. Wikimedia Commons (primary) — free, no key required, best topical relevance.
-  2. Pixabay (fallback) — used only if Wikimedia returns no results.
-     Register at https://pixabay.com/api/docs/ to get a free API key.
+  1. Pexels (primary) — free 200 req/hour, high-quality photos, Russian support.
+     Register at https://www.pexels.com/api/ to get a free API key.
+  2. Pixabay (fallback) — free API, register at https://pixabay.com/api/docs/
+  3. Wikimedia Commons (last resort) — free, no key required.
 """
 
 import asyncio
@@ -100,12 +101,15 @@ class MediaProcessor:
         """Search for stock photos.
 
         Priority:
-          1. Wikimedia Commons — free, no key, best topical relevance for news topics
-          2. Pixabay — free API (PIXABAY_API_KEY), fallback when Wikimedia has no results
+          1. Pexels — best quality, supports Russian queries, 200 req/hour free
+          2. Pixabay — free API, good variety
+          3. Wikimedia Commons — free, no key, last resort
         """
-        results = await self._search_wikimedia(keywords, count)
+        results = await self._search_pexels(keywords, count)
         if not results:
             results = await self._search_pixabay(keywords, count)
+        if not results:
+            results = await self._search_wikimedia(keywords, count)
         return results
 
     async def _search_wikimedia(self, keywords: List[str], count: int) -> List[dict]:
@@ -115,6 +119,8 @@ class MediaProcessor:
         Two-step process:
           1. Full-text search in file namespace (NS=6)
           2. Resolve image URL + thumbnail for each result
+
+        Search strategy: topic keywords FIRST (best relevance), Izhevsk only as fallback.
         """
         query = " ".join(keywords[:4])
         results = []
@@ -127,7 +133,6 @@ class MediaProcessor:
             ) as session:
                 # ── Step 1: search for file titles ─────────────────────────
 
-                # Try Russian query first, fall back to English keywords if empty
                 async def _search_titles(q: str) -> List[str]:
                     params = {
                         "action": "query",
@@ -150,19 +155,23 @@ class MediaProcessor:
                             for item in data.get("query", {}).get("search", [])
                         ]
 
-                query = " ".join(["Izhevsk"] + keywords[:3])  # Try anchored to Izhevsk first
-                titles = await _search_titles(query)
+                # Strategy: topic keywords first → best relevance for the subject
+                # Only add Izhevsk as a later fallback for local place queries
+                generic_q = " ".join(keywords[:3])
+                titles = await _search_titles(generic_q)
+                if titles:
+                    logger.info(f"Wikimedia: found results for topic query '{generic_q}'")
                 if not titles:
-                    # Fallback 1: English keywords + Izhevsk
+                    # Fallback: try with Izhevsk prefix (for local-specific topics)
+                    query = " ".join(["Izhevsk"] + keywords[:3])
+                    titles = await _search_titles(query)
+                    if titles:
+                        logger.info(f"Wikimedia: found results with Izhevsk prefix for '{query}'")
+                if not titles:
+                    # Last resort: English keywords only
                     en_kw = [k for k in keywords if k.isascii()][:2]
                     if en_kw:
-                        titles = await _search_titles("Izhevsk " + " ".join(en_kw))
-                if not titles:
-                    # Fallback 2: keywords alone (no city) — generic topic stock photo
-                    generic_q = " ".join(keywords[:3])
-                    titles = await _search_titles(generic_q)
-                    if titles:
-                        logger.info(f"Wikimedia: using generic (non-Izhevsk) results for '{generic_q}'")
+                        titles = await _search_titles(" ".join(en_kw))
 
                 if not titles:
                     logger.info(f"Wikimedia: no results for '{query}'")
@@ -306,6 +315,65 @@ class MediaProcessor:
             logger.error(f"Pixabay network error: {type(e).__name__}: {e}")
         except Exception as e:
             logger.error(f"Pixabay search failed: {type(e).__name__}: {e}")
+
+        return results
+
+    async def _search_pexels(self, keywords: List[str], count: int) -> List[dict]:
+        """Search Pexels for photos. Requires PEXELS_API_KEY.
+
+        Free API — 200 requests/hour. Register at https://www.pexels.com/api/
+        Excellent photo quality, supports Russian queries.
+        """
+        if not self.pexels_key:
+            logger.debug("Pexels: no API key configured, skipping")
+            return []
+
+        query = " ".join(keywords[:4])
+        results = []
+
+        try:
+            headers = {"Authorization": self.pexels_key}
+            async with aiohttp.ClientSession(headers=headers) as session:
+                params = {
+                    "query": query,
+                    "per_page": count + 3,   # fetch extra to filter
+                    "orientation": "landscape",
+                }
+                async with session.get(
+                    "https://api.pexels.com/v1/search",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for photo in data.get("photos", [])[:count]:
+                            # Use 'large' size — good quality, reasonable file size
+                            url = photo.get("src", {}).get("large", "")
+                            if not url:
+                                continue
+                            results.append({
+                                "url": url,
+                                "thumb_url": photo.get("src", {}).get("medium", url),
+                                "description": photo.get("alt", "") or query,
+                                "author": photo.get("photographer", "Pexels"),
+                                "source": "pexels",
+                            })
+                        logger.info(
+                            f"Pexels: found {len(results)} photos for '{query}'"
+                        )
+                    elif resp.status == 429:
+                        logger.warning("Pexels: rate limit exceeded (200 req/hour)")
+                    elif resp.status == 401:
+                        logger.error("Pexels: invalid API key")
+                    else:
+                        logger.error(f"Pexels API {resp.status}")
+
+        except asyncio.TimeoutError:
+            logger.error("Pexels API timeout (>15s)")
+        except aiohttp.ClientError as e:
+            logger.error(f"Pexels network error: {type(e).__name__}: {e}")
+        except Exception as e:
+            logger.error(f"Pexels search failed: {type(e).__name__}: {e}")
 
         return results
 
