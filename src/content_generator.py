@@ -4,7 +4,9 @@ using Gemini AI and external APIs. Each post includes a stock photo.
 """
 
 import asyncio
+import json
 import logging
+import os
 import random
 import re
 from datetime import datetime
@@ -198,6 +200,19 @@ RECIPE_TOPICS = [
     "домашний хлеб по-удмуртски",
     "блины с начинкой из местных ягод",
     "пирог с калиной по-удмуртски",
+    "удмуртский пирог губи сюкась с грибами",
+    "запеканка из тыквы по-удмуртски",
+    "кокрок с капустой и яйцом",
+    "зразы картофельные с мясом по-удмуртски",
+    "уха по-камски из речной рыбы",
+    "удмуртская каша из полбы",
+    "варенье из лесной земляники",
+    "компот из лесных ягод Удмуртии",
+    "капустные шанежки по-удмуртски",
+    "удмуртские пирожки с ливером",
+    "морс из клюквы и брусники",
+    "тушёная репа по-старинному рецепту",
+    "удмуртский хлебный квас",
 ]
 
 LIFEHACK_TOPICS = [
@@ -332,21 +347,48 @@ HOLIDAY_PROMPT = """Напиши поздравительный пост для 
 class ContentGenerator:
     """Generates unique daily content for the channel with stock photos."""
 
+    _TOPICS_FILE = "data/used_topics.json"
+
     def __init__(self, config: Config, rewriter=None, media_processor=None):
         self.config = config
-        self._rewriter = rewriter  # AIRewriter — used for ask_ai (Gemini→YandexGPT fallback)
+        self._rewriter = rewriter
         self._media = media_processor
-        self._used_topics: dict[str, list] = {}  # Track used topics per rubric
+        self._used_topics: dict[str, list] = self._load_used_topics()
+
+    def _load_used_topics(self) -> dict:
+        """Load used topics from persistent JSON file."""
+        try:
+            if os.path.exists(self._TOPICS_FILE):
+                with open(self._TOPICS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info(f"Loaded used topics from {self._TOPICS_FILE}: {sum(len(v) for v in data.values())} total")
+                return data
+        except Exception as e:
+            logger.warning(f"Failed to load used topics: {e}")
+        return {}
+
+    def _save_used_topics(self):
+        """Save used topics to persistent JSON file."""
+        try:
+            os.makedirs(os.path.dirname(self._TOPICS_FILE), exist_ok=True)
+            with open(self._TOPICS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self._used_topics, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save used topics: {e}")
 
     def _pick_topic(self, rubric: str, pool: list) -> str:
-        """Pick a random unused topic from the pool."""
+        """Pick a random unused topic from the pool. Persists to disk."""
         used = self._used_topics.get(rubric, [])
         available = [t for t in pool if t not in used]
         if not available:
+            # All topics used — reset this rubric
+            logger.info(f"All {len(pool)} topics for '{rubric}' used, resetting cycle")
             self._used_topics[rubric] = []
             available = pool
         topic = random.choice(available)
         self._used_topics.setdefault(rubric, []).append(topic)
+        self._save_used_topics()
+        logger.info(f"Topic picked for '{rubric}': {topic} ({len(available)-1} remaining)")
         return topic
 
     async def _ask_ai(self, prompt: str, temperature: float = 0.8) -> Optional[str]:
