@@ -1,79 +1,122 @@
-# 🤖 News Aggregator Bot
+# 🤖 News Aggregator Bot — Ижевск Сегодня
 
-Telegram бот для мониторинга публичных каналов, AI рерайта новостей и публикации в свой канал с модерацией.
+Автоматический Telegram-бот для мониторинга новостных каналов, AI-рерайта и публикации в канал **[@IzhevskTodayNews](https://t.me/IzhevskTodayNews)**.
+
+## 🔥 Возможности
+
+- 📡 **Мониторинг каналов** — Telethon, 7+ источников
+- 🧠 **AI-рерайт** — AITUNNEL (GPT-4o-mini) → Gemini → Groq → YandexGPT → ReText.AI
+- 🖼️ **Стоковые фото** — Pexels → Pixabay → Wikimedia Commons (автоматический поиск)
+- 🔍 **Фильтрация** — гео-фильтр, AI-проверка релевантности и срочности
+- ✅ **Модерация** — кнопки одобрения, редактирования, перерайта
+- 📤 **Кросс-постинг** — VK, MAX (OK Мессенджер)
+- 📰 **Генерация контента** — погода, рецепты (60+), факты, лайфхаки, места, праздники
+- 📊 **Дайджест** — ежедневный вечерний обзор новостей
+- 🛡️ **Circuit Breaker** — автопереключение между AI-движками при сбоях
 
 ## 🚀 Быстрый старт
 
-### 1. Получите API ключи
+### 1. API ключи
 
-| Ключ | Где получить |
-|------|-------------|
-| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | [my.telegram.org/apps](https://my.telegram.org/apps) |
-| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) |
-| `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) |
-| `UNSPLASH_ACCESS_KEY` (опционально) | [unsplash.com/developers](https://unsplash.com/developers) |
+| Ключ | Где получить | Обязательно |
+|------|-------------|:-----------:|
+| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) | ✅ |
+| `TELEGRAM_API_ID` / `API_HASH` | [my.telegram.org](https://my.telegram.org/apps) | ✅ |
+| `AITUNNEL_API_KEY` | [aitunnel.ru](https://aitunnel.ru) | ✅ |
+| `GEMINI_API_KEYS` | [aistudio.google.com](https://aistudio.google.com) | ⚡ fallback |
+| `PEXELS_API_KEY` | [pexels.com/api](https://www.pexels.com/api/) | 📷 рекомендуется |
+| `YANDEX_API_KEY` | [console.yandex.cloud](https://console.yandex.cloud) | ⚡ fallback |
+| `VK_ACCESS_TOKEN` | VK API | 📤 опционально |
 
-### 2. Настройте `.env`
+### 2. Настройка
 
 ```bash
 cp .env.example .env
-# Заполните все обязательные поля в .env
+# Заполните ключи в .env
 ```
 
-### 3. Первый запуск (локально)
+### 3. Запуск
 
 ```bash
+# Локально
 pip install -r requirements.txt
 python -m src.main
-```
 
-> ⚠️ При первом запуске Telethon попросит ввести номер телефона и OTP-код из Telegram. Это нужно сделать один раз — сессия сохранится в `data/news_bot_session.session`.
-
-### 4. Docker
-
-```bash
+# Docker
 docker-compose up -d
 ```
+
+> ⚠️ При первом запуске Telethon попросит номер телефона + OTP. Сессия сохранится в `data/`.
 
 ## 📋 Команды бота
 
 | Команда | Описание |
 |---------|----------|
 | `/start` | Главное меню |
-| `/queue` | Очередь постов на модерации |
+| `/queue` | Очередь на модерации |
 | `/stats` | Статистика |
-| `/sources` | Управление каналами-источниками |
-| `/publish` | Опубликовать все одобренные посты |
+| `/sources` | Управление источниками |
+| `/publish` | Опубликовать одобренные |
 | `/help` | Справка |
 
-## 🔄 Как это работает
+## 🔄 Архитектура
 
 ```
-1. Бот мониторит указанные каналы через Telethon
-2. Новый пост → AI рерайт через Gemini API
-3. Проверка фото на водяные знаки
-4. Отправка админу на модерацию (с кнопками)
-5. Админ: ✅ Опубликовать / ✏️ Редактировать / 🔄 Перерайт / ❌ Отклонить
-6. Одобренный пост публикуется в целевой канал
+Источники (7 каналов) → Telethon мониторинг
+    ↓
+Фильтрация (гео + AI релевантность + срочность)
+    ↓
+AI рерайт (AITUNNEL → Gemini → Groq → YandexGPT)
+    ↓
+Стоковое фото (Pexels → Pixabay → Wikimedia)
+    ↓
+Модерация (кнопки: ✅/✏️/🔄/❌)
+    ↓
+Публикация → Telegram + VK + MAX
 ```
 
-## 📁 Структура проекта
+## 📁 Структура
 
 ```
-news-bot/
+news-aggregator-bot/
 ├── src/
-│   ├── __init__.py
 │   ├── main.py              # Точка входа
 │   ├── config.py             # Конфигурация
 │   ├── database.py           # SQLite БД
 │   ├── channel_monitor.py    # Мониторинг каналов (Telethon)
-│   ├── ai_rewriter.py        # AI рерайт (Gemini/ReText)
-│   ├── media_processor.py    # Обработка медиа
+│   ├── ai_rewriter.py        # AI рерайт (AITUNNEL/Gemini/Groq/YandexGPT)
+│   ├── media_processor.py    # Стоковые фото + водяные знаки
+│   ├── content_generator.py  # Генерация рубрик (погода, рецепты, факты)
+│   ├── content_scheduler.py  # Расписание публикации рубрик
+│   ├── vk_publisher.py       # Кросс-постинг в VK
+│   ├── max_publisher.py      # Кросс-постинг в MAX (ОК)
 │   └── bot.py                # Telegram бот (Aiogram 3)
-├── data/                     # БД и сессии
+├── data/                     # БД, сессии, used_topics.json
 ├── media/                    # Скачанные медиафайлы
 ├── .env.example
-├── requirements.txt
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml
+└── requirements.txt
 ```
+
+## 💰 Стоимость
+
+| Сервис | Цена | Использование |
+|--------|------|---------------|
+| AITUNNEL (GPT-4o-mini) | ~300₽/мес | AI рерайт, рубрики, фильтрация |
+| Pexels | Бесплатно | 200 запросов/час |
+| Gemini | Бесплатно | Fallback AI |
+| Groq | Бесплатно | Fallback AI |
+| VPS (Beget) | ~300₽/мес | Хостинг |
+
+**Итого: ~600₽/мес** за полностью автоматический новостной канал.
+
+## 🛠️ Деплой
+
+Деплой через **GitHub Actions** → Docker image → VPS (Dokploy).
+
+При пуше в `main` автоматически собирается образ `ghcr.io/xyling12/news-aggregator-bot:main`.
+
+---
+
+📲 **Канал**: [@IzhevskTodayNews](https://t.me/IzhevskTodayNews)

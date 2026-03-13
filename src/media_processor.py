@@ -366,7 +366,8 @@ class MediaProcessor:
                     elif resp.status == 401:
                         logger.error("Pexels: invalid API key")
                     else:
-                        logger.error(f"Pexels API {resp.status}")
+                        body = await resp.text()
+                        logger.error(f"Pexels API {resp.status}: {body[:200]}")
 
         except asyncio.TimeoutError:
             logger.error("Pexels API timeout (>15s)")
