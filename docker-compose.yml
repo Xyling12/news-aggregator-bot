@@ -15,6 +15,9 @@ services:
       - AUTO_PUBLISH=true
       - PUBLISH_INTERVAL=900
       - VK_GROUP_ID=236380336
+      - AITUNNEL_API_KEY=sk-aitunnel-GEhq2XTu9QmIrrOZe2S1Di2WAdp7yQ0C
+      - AITUNNEL_MODEL=gpt-4o-mini
+      - PEXELS_API_KEY=I71vTtRmVcODHWvBFyXjviye6s7c0WdrOIILXo3O4iXiArXCuVLONb5l
     healthcheck:
       test: [ "CMD", "python", "-c", "import os; open('/app/data/bot.db')" ]
       interval: 60s
