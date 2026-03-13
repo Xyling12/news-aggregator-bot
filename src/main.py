@@ -101,6 +101,7 @@ async def main():
     vk_pub = VKPublisher(
         access_token=config.vk_access_token,
         group_id=config.vk_group_id,
+        user_token=config.vk_user_token,
     )
     bot_module._vk_publisher = vk_pub
     if vk_pub.enabled:

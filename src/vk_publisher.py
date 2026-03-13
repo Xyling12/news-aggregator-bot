@@ -21,8 +21,9 @@ class VKPublisher:
     API_VERSION = "5.199"
     API_BASE = "https://api.vk.com/method"
 
-    def __init__(self, access_token: str, group_id: str):
+    def __init__(self, access_token: str, group_id: str, user_token: str = ""):
         self.access_token = access_token
+        self.user_token = user_token  # User token for photo uploads (needs 'photos' scope)
         self.group_id = group_id.replace("club", "")  # Strip "club" prefix if present
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -89,8 +90,10 @@ class VKPublisher:
         """
         session = await self._get_session()
 
+        # Allow overriding the token (e.g. user token for photo uploads)
+        token = params.pop("_token_override", None) or self.access_token
         params.update({
-            "access_token": self.access_token,
+            "access_token": token,
             "v": self.API_VERSION,
         })
 
@@ -141,10 +144,12 @@ class VKPublisher:
         """
         session = await self._get_session()
 
-        # Step 1: Get upload server URL
+        # Step 1: Get upload server URL (requires user token with 'photos' scope)
+        photo_token = self.user_token or self.access_token
         upload_server = await self._api_call(
             "photos.getWallUploadServer",
             group_id=int(self.group_id),
+            _token_override=photo_token,
         )
         if not upload_server:
             return None
@@ -214,13 +219,14 @@ class VKPublisher:
             logger.error(f"VK photo upload unexpected error: {type(e).__name__}: {e}")
             return None
 
-        # Step 4: Save the uploaded photo
+        # Step 4: Save the uploaded photo (requires user token with 'photos' scope)
         save_result = await self._api_call(
             "photos.saveWallPhoto",
             group_id=int(self.group_id),
             photo=upload_result["photo"],
             server=upload_result["server"],
             hash=upload_result["hash"],
+            _token_override=photo_token,
         )
 
         if save_result and len(save_result) > 0:
