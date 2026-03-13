@@ -48,6 +48,10 @@ class Config:
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 
+    # Optional: AITUNNEL (OpenAI-compatible proxy, primary engine)
+    aitunnel_api_key: str = ""
+    aitunnel_model: str = "gpt-4o-mini"
+
     # Optional: ReText.AI API
     retext_api_key: str = ""
 
@@ -149,6 +153,8 @@ class Config:
             yandex_folder_id=os.getenv("YANDEX_FOLDER_ID", ""),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            aitunnel_api_key=os.getenv("AITUNNEL_API_KEY", ""),
+            aitunnel_model=os.getenv("AITUNNEL_MODEL", "gpt-4o-mini"),
             retext_api_key=os.getenv("RETEXT_API_KEY", ""),
             openweather_api_key=os.getenv("OPENWEATHER_API_KEY", ""),
             yandex_weather_api_key=os.getenv("YANDEX_WEATHER_API_KEY", ""),

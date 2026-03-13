@@ -345,12 +345,25 @@ class AIRewriter:
         Check if a news post is of general interest (not region-specific).
         Returns True if the news is relevant to everyone, False if regional.
         """
-        if not self._gemini_model:
-            # If no Gemini, let everything through
-            return True
+        prompt = RELEVANCE_PROMPT.format(text=text[:500])
+
+        # Try AITUNNEL first
+        if self.config.aitunnel_api_key:
+            try:
+                answer = await self._aitunnel_chat(prompt=prompt, temperature=0.1, max_tokens=10)
+                if answer:
+                    is_relevant = _parse_binary_answer(answer)
+                    if is_relevant is not None:
+                        logger.info(f"Relevance check [AITUNNEL]: {'✅ general' if is_relevant else '❌ regional'}")
+                        return is_relevant
+            except Exception as e:
+                logger.warning(f"Relevance check [AITUNNEL] failed: {e}")
+
+        # Fallback to Gemini
+        if not self._gemini_model or self._gemini_circuit_open():
+            return True  # If no AI, let everything through
 
         try:
-            prompt = RELEVANCE_PROMPT.format(text=text[:500])
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -381,11 +394,25 @@ class AIRewriter:
         Check if a news post is genuinely important/urgent for readers.
         Returns True if worth publishing, False if it's noise/fluff.
         """
-        if not self._gemini_model:
-            return True  # If no Gemini, let everything through
+        prompt = URGENCY_PROMPT.format(text=text[:500])
+
+        # Try AITUNNEL first
+        if self.config.aitunnel_api_key:
+            try:
+                answer = await self._aitunnel_chat(prompt=prompt, temperature=0.1, max_tokens=10)
+                if answer:
+                    is_urgent = _parse_binary_answer(answer)
+                    if is_urgent is not None:
+                        logger.info(f"Urgency check [AITUNNEL]: {'✅ important' if is_urgent else '❌ skipped'}")
+                        return is_urgent
+            except Exception as e:
+                logger.warning(f"Urgency check [AITUNNEL] failed: {e}")
+
+        # Fallback to Gemini
+        if not self._gemini_model or self._gemini_circuit_open():
+            return True
 
         try:
-            prompt = URGENCY_PROMPT.format(text=text[:500])
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -409,16 +436,23 @@ class AIRewriter:
         except Exception as e:
             logger.error(f"Urgency check failed: {e}")
 
-        return False  # On error, be conservative
+        return False
 
     async def rewrite(self, original_text: str) -> Tuple[Optional[str], str]:
         """
         Rewrite text using AI.
         
         Returns:
-            Tuple of (rewritten_text or None, engine_used: 'gemini' | 'groq' | 'yandexgpt' | 'retext' | 'error')
+            Tuple of (rewritten_text or None, engine_used)
+        Fallback chain: AITUNNEL → Gemini → Groq → YandexGPT → ReText
         """
-        # Try Gemini first
+        # Try AITUNNEL first (OpenAI-compatible, paid, most reliable)
+        if self.config.aitunnel_api_key:
+            result = await self._rewrite_with_aitunnel(original_text)
+            if result:
+                return result, "aitunnel"
+
+        # Fallback to Gemini
         if self._gemini_model:
             result = await self._rewrite_with_gemini(original_text)
             if result:
@@ -487,6 +521,65 @@ class AIRewriter:
 
 Исходная новость:
 {original_text}"""
+
+        # ── Try AITUNNEL (OpenAI-compatible, paid, most reliable) ─────────
+        if self.config.aitunnel_api_key:
+            import re as _re2
+            try:
+                aitunnel_raw = await self._aitunnel_chat(
+                    prompt=COMBINED_PROMPT,
+                    temperature=0.85,
+                    max_tokens=2048,
+                )
+                if aitunnel_raw:
+                    # Parse the same РЕРАЙТ/ХЭШТЕГИ/ФОТО format
+                    rewrite_match = _re.search(
+                        r'РЕРАЙТ:\s*\n(.*?)(?=\nХЭШТЕГИ:|$)',
+                        aitunnel_raw, _re.DOTALL
+                    )
+                    hashtag_match = _re.search(
+                        r'ХЭШТЕГИ:\s*\n(.*?)(?=\nФОТО:|$)',
+                        aitunnel_raw, _re.DOTALL
+                    )
+                    photo_match = _re.search(
+                        r'ФОТО:\s*\n(.*?)$',
+                        aitunnel_raw, _re.DOTALL
+                    )
+
+                    rewritten = rewrite_match.group(1).strip() if rewrite_match else None
+                    hashtags_raw = hashtag_match.group(1).strip() if hashtag_match else ""
+                    photo_raw = photo_match.group(1).strip() if photo_match else ""
+
+                    if rewritten and not self._is_refusal(rewritten) and len(rewritten) > 50:
+                        hashtags = [
+                            t.strip() for t in hashtags_raw.split()
+                            if t.strip().startswith("#")
+                        ][:4]
+
+                        bad_keywords = {
+                            "news", "information", "article", "report", "update",
+                            "abstract", "concept", "technology", "digital", "modern",
+                            "bell", "ring", "sound", "alarm", "signal",
+                            "sport", "fitness", "gym", "workout", "climbing",
+                        }
+                        photo_keywords = [
+                            kw.strip().lower()
+                            for kw in photo_raw.split(",")
+                            if kw.strip() and kw.strip().lower() not in bad_keywords
+                        ][:3]
+
+                        uniqueness = self.calculate_uniqueness(original_text, rewritten)
+                        logger.info(
+                            f"rewrite_full [aitunnel/{self.config.aitunnel_model}]: OK — "
+                            f"uniqueness {uniqueness:.0%}, "
+                            f"{len(hashtags)} tags, {len(photo_keywords)} photo kw"
+                        )
+                        return rewritten, f"aitunnel/{self.config.aitunnel_model}", hashtags, photo_keywords
+
+                    logger.warning(f"rewrite_full [aitunnel]: parse failed or refusal")
+
+            except Exception as e:
+                logger.error(f"rewrite_full [aitunnel]: {e}")
 
         # ── Try combined Gemini call ─────────────────────────────────────
         if self._gemini_models:
@@ -561,7 +654,14 @@ class AIRewriter:
 
                 except Exception as e:
                     err = str(e).lower()
-                    if "429" in err or "quota" in err or "resource" in err:
+                    is_skip = "429" in err or "quota" in err or "resource" in err
+                    is_geo = "400" in err and "location" in err
+                    if is_skip or is_geo:
+                        if is_geo:
+                            logger.warning(f"rewrite_full [{model_name}]: Gemini geo-blocked (400 location), opening circuit breaker")
+                            self._cb_record_error()
+                            self._cb_open_until = __import__('time').monotonic() + 7200  # 2h penalty
+                            break  # All models will have the same geo issue
                         logger.warning(f"rewrite_full [{model_name}]: quota hit, trying next model")
                         continue
                     logger.error(f"rewrite_full [{model_name}]: {e}")
@@ -581,13 +681,26 @@ class AIRewriter:
         return rewritten, engine, hashtags, photo_keywords
 
     async def ask_ai(self, prompt: str, temperature: float = 0.8, _key_switched: bool = False) -> Optional[str]:
-        """Generic AI text generation with Gemini→Groq→YandexGPT fallback.
+        """Generic AI text generation with AITUNNEL→Gemini→Groq→YandexGPT fallback.
 
         Used by ContentGenerator for rubric posts (weather, recipe, facts, etc.).
         """
         import re as _re
 
-        # Try Gemini first — unless circuit breaker is open
+        # Try AITUNNEL first (most reliable, paid)
+        if self.config.aitunnel_api_key:
+            text = await self._aitunnel_chat(
+                prompt=prompt,
+                temperature=temperature,
+                max_tokens=2048,
+            )
+            if text and len(text) > 20:
+                text = _re.sub(r'^#{1,3}\s*', '', text, flags=_re.MULTILINE)
+                text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+                logger.info(f"ask_ai: AITUNNEL OK ({len(text)} chars)")
+                return text
+
+        # Try Gemini — unless circuit breaker is open
         if self._gemini_models and not self._gemini_circuit_open():
             all_quota = True  # Track whether ALL failures were quota-related
             try:
@@ -614,8 +727,13 @@ class AIRewriter:
                         all_quota = False
                     except Exception as gem_err:
                         err_str = str(gem_err).lower()
-                        if "quota" in err_str or "limit" in err_str or "429" in err_str:
-                            logger.warning(f"ask_ai: {_name} quota hit, trying next")
+                        is_geo = "400" in err_str and "location" in err_str
+                        if "quota" in err_str or "limit" in err_str or "429" in err_str or is_geo:
+                            if is_geo:
+                                logger.warning(f"ask_ai: {_name} geo-blocked (400 location), opening circuit breaker")
+                                self._cb_open_until = __import__('time').monotonic() + 7200
+                            else:
+                                logger.warning(f"ask_ai: {_name} quota hit, trying next")
                             self._cb_record_error()
                             continue
                         logger.warning(f"ask_ai: {_name} error: {gem_err}")
@@ -749,8 +867,14 @@ class AIRewriter:
             except Exception as e:
                 error_str = str(e).lower()
                 is_quota = "429" in error_str or "quota" in error_str or "resource" in error_str
-                
-                if is_quota:
+                is_geo = "400" in error_str and "location" in error_str
+
+                if is_quota or is_geo:
+                    if is_geo:
+                        logger.warning(f"Gemini [{model_name}]: geo-blocked (400 location), skipping all Gemini models")
+                        self._cb_record_error()
+                        self._cb_open_until = __import__('time').monotonic() + 7200
+                        return None  # All models blocked, fall through to YandexGPT
                     logger.warning(f"Gemini [{model_name}]: quota exhausted, trying next model...")
                     continue  # Try next model
                 else:
@@ -867,6 +991,67 @@ class AIRewriter:
 
         return None
 
+    async def _aitunnel_chat(self, prompt: str, temperature: float, max_tokens: int) -> Optional[str]:
+        """Generic AITUNNEL chat completion helper (OpenAI-compatible endpoint)."""
+        if not self.config.aitunnel_api_key:
+            return None
+
+        url = "https://api.aitunnel.ru/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.aitunnel_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.config.aitunnel_model,
+            "messages": [
+                {"role": "system", "content": "Ты — главный редактор популярного новостного Telegram-канала «Ижевск Сегодня». Пиши живо, по-человечески."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=45)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        choices = data.get("choices", [])
+                        if not choices:
+                            return None
+                        message = choices[0].get("message", {}) or {}
+                        content = (message.get("content") or "").strip()
+                        if content:
+                            logger.info(f"AITUNNEL/{self.config.aitunnel_model}: OK ({len(content)} chars)")
+                            return content
+                        return None
+                    error_text = await resp.text()
+                    logger.error(f"AITUNNEL returned {resp.status}: {error_text[:200]}")
+        except asyncio.TimeoutError:
+            logger.error("AITUNNEL request timeout (>45s)")
+        except Exception as e:
+            logger.error(f"AITUNNEL request failed: {e}")
+
+        return None
+
+    async def _rewrite_with_aitunnel(self, text: str) -> Optional[str]:
+        """Rewrite text using AITUNNEL API (OpenAI-compatible, GPT-4o-mini)."""
+        prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
+        rewritten = await self._aitunnel_chat(prompt=prompt, temperature=0.9, max_tokens=2048)
+        if not rewritten:
+            return None
+        if self._is_refusal(rewritten):
+            logger.warning(f"AITUNNEL: refusal detected: {rewritten[:80]}")
+            return None
+        if len(rewritten) <= 50 or rewritten == text:
+            logger.warning("AITUNNEL: too short or identical")
+            return None
+
+        uniqueness = self.calculate_uniqueness(text, rewritten)
+        logger.info(f"AITUNNEL: uniqueness {uniqueness:.0%} ({len(text)} -> {len(rewritten)} chars)")
+        return rewritten
+
     async def _rewrite_with_groq(self, text: str) -> Optional[str]:
         """Rewrite text using Groq API."""
         prompt = REWRITE_PROMPT.format(text=text) if len(text) > 300 else REWRITE_SHORT_PROMPT.format(text=text)
@@ -919,7 +1104,7 @@ class AIRewriter:
 
     async def generate_hashtags(self, text: str) -> list[str]:
         """Generate relevant hashtags for a news post."""
-        if not self._gemini_model:
+        if not self._gemini_model or self._gemini_circuit_open():
             return []
 
         try:
@@ -962,7 +1147,13 @@ class AIRewriter:
                 return tags[:4]
 
         except Exception as e:
-            logger.error(f"Hashtag generation failed: {e}")
+            err_str = str(e).lower()
+            if "400" in err_str and "location" in err_str:
+                logger.warning(f"Hashtag generation: Gemini geo-blocked, opening circuit breaker")
+                self._cb_open_until = __import__('time').monotonic() + 7200
+                self._cb_record_error()
+            else:
+                logger.error(f"Hashtag generation failed: {e}")
 
         return []
 
@@ -1069,7 +1260,7 @@ class AIRewriter:
 
     async def generate_keywords(self, text: str) -> list[str]:
         """Extract keywords from text for stock photo search."""
-        if not self._gemini_model:
+        if not self._gemini_model or self._gemini_circuit_open():
             return self._extract_keywords_fallback(text)
 
         try:
@@ -1142,7 +1333,13 @@ class AIRewriter:
                 return keywords[:3]
 
         except Exception as e:
-            logger.error(f"Keyword extraction failed: {e}")
+            err_str = str(e).lower()
+            if "400" in err_str and "location" in err_str:
+                logger.warning(f"Keyword extraction: Gemini geo-blocked, opening circuit breaker")
+                self._cb_open_until = __import__('time').monotonic() + 7200
+                self._cb_record_error()
+            else:
+                logger.error(f"Keyword extraction failed: {e}")
 
         # Fallback: topic-based keyword mapping without AI
         return self._extract_keywords_fallback(text)

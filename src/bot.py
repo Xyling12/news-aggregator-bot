@@ -1473,7 +1473,7 @@ async def process_new_post(post_id: int):
 
     if is_local:
         # Local source: apply geo filter — reject only if text explicitly points to another region
-        if has_non_local_geo and not has_local_geo:
+        if has_non_local_geo and not has_geo:
             await _db.update_post_status(post_id, "rejected")
             logger.info(f"Post #{post_id} rejected: local source but non-local geo markers in text")
             return
@@ -1481,7 +1481,7 @@ async def process_new_post(post_id: int):
         # Federal/non-local source: skip hard geo filter, use AI relevance check instead.
         # Hard geo filter was too strict — it blocked international/political/consumer news
         # (e.g. "Аферисты продают БАДы", "Ким Чен Ын") that are relevant to all readers.
-        if has_local_geo or looks_federal:
+        if has_geo or looks_federal:
             # Fast-path: obvious local/federal relevance — skip AI call
             pass
         else:
@@ -1595,7 +1595,7 @@ async def process_new_post(post_id: int):
                     desc_lower = (best.get("description", "") + " " + " ".join(keywords)).lower()
                     # Accept if ≥1 keyword appears in description or title
                     kw_match = any(kw.lower() in desc_lower for kw in keywords[:3])
-                    if kw_match or has_watermark:
+                    if kw_match or post.get("has_watermark"):
                         stock_url = best["url"]
                         logger.info(
                             f"Post #{post_id}: stock photo selected "
