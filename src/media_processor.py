@@ -2,10 +2,10 @@
 Media Processor — handles watermark detection, media downloading, and stock photo search.
 
 Stock photo priority:
-  1. Wikimedia Commons (primary) — free, no key required, works from Russia.
+  1. Pexels (primary) — best quality, 200 req/hour free. Routed via NL VPS SOCKS5 proxy
+     (PEXELS_PROXY=socks5://user:pass@host:port) to bypass Cloudflare geo-block.
   2. Pixabay (fallback) — free API, register at https://pixabay.com/api/docs/
-  3. Pexels (last resort) — blocked from Russian IPs by Cloudflare.
-     Register at https://www.pexels.com/api/ to get a free API key.
+  3. Wikimedia Commons (last resort) — free, no key required.
 """
 
 import asyncio
@@ -15,6 +15,11 @@ import re
 from typing import Optional, List, Tuple
 
 import aiohttp
+try:
+    from aiohttp_socks import ProxyConnector
+    SOCKS_AVAILABLE = True
+except ImportError:
+    SOCKS_AVAILABLE = False
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -101,15 +106,15 @@ class MediaProcessor:
         """Search for stock photos.
 
         Priority:
-          1. Wikimedia Commons — free, no key, works from Russia
+          1. Pexels — best quality, routed via NL VPS SOCKS5 proxy (PEXELS_PROXY env)
           2. Pixabay — free API, good variety
-          3. Pexels — best quality but blocked from Russian IPs by Cloudflare
+          3. Wikimedia Commons — free, no key, last resort
         """
-        results = await self._search_wikimedia(keywords, count)
+        results = await self._search_pexels(keywords, count)
         if not results:
             results = await self._search_pixabay(keywords, count)
         if not results:
-            results = await self._search_pexels(keywords, count)
+            results = await self._search_wikimedia(keywords, count)
         return results
 
     async def _search_wikimedia(self, keywords: List[str], count: int) -> List[dict]:
@@ -336,7 +341,14 @@ class MediaProcessor:
                 "Authorization": self.pexels_key,
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
-            async with aiohttp.ClientSession(headers=headers) as session:
+            proxy_url = os.getenv("PEXELS_PROXY", "")
+            if proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"):
+                connector = ProxyConnector.from_url(proxy_url)
+                session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
+                logger.debug(f"Pexels: using SOCKS5 proxy {proxy_url[:30]}...")
+            else:
+                session_ctx = aiohttp.ClientSession(headers=headers)
+            async with session_ctx as session:
                 params = {
                     "query": query,
                     "per_page": count + 3,   # fetch extra to filter
