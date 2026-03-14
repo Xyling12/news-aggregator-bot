@@ -351,8 +351,9 @@ class MediaProcessor:
             async with session_ctx as session:
                 params = {
                     "query": query,
-                    "per_page": count + 3,   # fetch extra to filter
+                    "per_page": count + 5,   # fetch extra to filter
                     "orientation": "landscape",
+                    "locale": "ru-RU",
                 }
                 async with session.get(
                     "https://api.pexels.com/v1/search",
@@ -361,7 +362,24 @@ class MediaProcessor:
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        for photo in data.get("photos", [])[:count]:
+                        all_photos = data.get("photos", [])
+
+                        # Deprioritize photos with people when query doesn't ask for people
+                        people_words = {"people", "person", "man", "woman", "group",
+                                        "team", "couple", "family", "children", "russian"}
+                        query_words = set(query.lower().split())
+                        query_wants_people = bool(query_words & people_words)
+
+                        if not query_wants_people and len(all_photos) > 1:
+                            # Sort: photos without people-related alt text first
+                            people_alt = {"people", "person", "man", "woman", "group",
+                                          "team", "couple", "meeting", "coworkers"}
+                            all_photos.sort(key=lambda p: any(
+                                w in (p.get("alt", "") or "").lower()
+                                for w in people_alt
+                            ))
+
+                        for photo in all_photos[:count]:
                             # Use 'large' size — good quality, reasonable file size
                             url = photo.get("src", {}).get("large", "")
                             if not url:

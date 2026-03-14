@@ -533,6 +533,25 @@ class TestMediaProcessor(unittest.TestCase):
         self.assertGreater(len(jpeg_bytes), 100)
         self.assertLess(len(jpeg_bytes), 8 * 1024 * 1024)
 
+    def test_photo_keywords_prompt_mentions_russian(self):
+        """PHOTO_KEYWORDS_PROMPT должен содержать инструкцию про russian."""
+        from src.content_generator import PHOTO_KEYWORDS_PROMPT
+        self.assertIn("russian", PHOTO_KEYWORDS_PROMPT.lower())
+
+    def test_pexels_locale_documented(self):
+        """Модуль media_processor должен упоминать locale для Pexels."""
+        import inspect
+        from src.media_processor import MediaProcessor
+        source = inspect.getsource(MediaProcessor._search_pexels)
+        self.assertIn("locale", source)
+
+    def test_digest_has_hint_keywords(self):
+        """generate_daily_digest должен передавать hint_keywords."""
+        import inspect
+        from src.content_generator import ContentGenerator
+        source = inspect.getsource(ContentGenerator.generate_daily_digest)
+        self.assertIn("hint_keywords", source)
+
 
 # ─── docker-compose.yml ───────────────────────────────────────────────────────
 
