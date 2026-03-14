@@ -2,10 +2,10 @@
 Media Processor — handles watermark detection, media downloading, and stock photo search.
 
 Stock photo priority:
-  1. Pexels (primary) — free 200 req/hour, high-quality photos, Russian support.
-     Register at https://www.pexels.com/api/ to get a free API key.
+  1. Wikimedia Commons (primary) — free, no key required, works from Russia.
   2. Pixabay (fallback) — free API, register at https://pixabay.com/api/docs/
-  3. Wikimedia Commons (last resort) — free, no key required.
+  3. Pexels (last resort) — blocked from Russian IPs by Cloudflare.
+     Register at https://www.pexels.com/api/ to get a free API key.
 """
 
 import asyncio
@@ -101,15 +101,15 @@ class MediaProcessor:
         """Search for stock photos.
 
         Priority:
-          1. Pexels — best quality, supports Russian queries, 200 req/hour free
+          1. Wikimedia Commons — free, no key, works from Russia
           2. Pixabay — free API, good variety
-          3. Wikimedia Commons — free, no key, last resort
+          3. Pexels — best quality but blocked from Russian IPs by Cloudflare
         """
-        results = await self._search_pexels(keywords, count)
+        results = await self._search_wikimedia(keywords, count)
         if not results:
             results = await self._search_pixabay(keywords, count)
         if not results:
-            results = await self._search_wikimedia(keywords, count)
+            results = await self._search_pexels(keywords, count)
         return results
 
     async def _search_wikimedia(self, keywords: List[str], count: int) -> List[dict]:
@@ -332,7 +332,10 @@ class MediaProcessor:
         results = []
 
         try:
-            headers = {"Authorization": self.pexels_key}
+            headers = {
+                "Authorization": self.pexels_key,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
             async with aiohttp.ClientSession(headers=headers) as session:
                 params = {
                     "query": query,
