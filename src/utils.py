@@ -314,14 +314,14 @@ def format_post(text: str, hashtags: list) -> str:
         if city_tag not in all_tags:
             all_tags.append(city_tag)
     if all_tags:
+        parts.append("─ ─ ─ ─ ─")
         parts.append(" ".join(all_tags))
         parts.append("")
 
     # Footer CTA
     parts.append(
-        '😊 <a href="https://t.me/IzhevskTodayNews">Подписаться в TG</a>'
-        ' | 📱 <a href="https://vk.com/club236380336">Подписаться в ВК</a>'
-        ' | 📩 <a href="https://t.me/NewsRussain11_bot">Прислать новость</a>'
+        '📲 <a href="https://t.me/IzhevskTodayNews">@IzhevskTodayNews</a>'
+        '  |  🤖 <a href="https://t.me/NewsRussain11_bot">@IzhevskTodayBot</a>'
     )
 
     return "\n".join(parts)

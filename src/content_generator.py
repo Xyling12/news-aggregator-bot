@@ -659,8 +659,8 @@ class ContentGenerator:
         )
         text = await self._ask_ai(prompt, temperature=0.5)
         if text:
-            text += "\n\n#погода #ижевск"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#погода #ижевск"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
 
         # Pick photo keywords based on actual weather condition — no city lock
         desc_lower = description.lower()
@@ -696,8 +696,8 @@ class ContentGenerator:
         prompt = HISTORY_PROMPT.format(date=date_str)
         text = await self._ask_ai(prompt)
         if text:
-            text += "\n\n#история #удмуртия #ижевск"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#история #удмуртия #ижевск"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         return await self._generate_with_photo(text, hint_keywords=["old photograph sepia", "historical archive document"])
 
     async def generate_five_facts(self) -> Tuple[Optional[str], Optional[str]]:
@@ -706,8 +706,8 @@ class ContentGenerator:
         prompt = FIVE_FACTS_PROMPT.format(topic=topic)
         text = await self._ask_ai(prompt)
         if text:
-            text += "\n\n#факты #ижевск #удмуртия"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#факты #ижевск #удмуртия"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         # Derive English search keywords from Russian topic
         topic_en_map = {
             "набережной": "embankment waterfront", "оружейном": "gun factory weapons",
@@ -738,8 +738,8 @@ class ContentGenerator:
         prompt = RECIPE_PROMPT.format(topic=topic)
         text = await self._ask_ai(prompt)
         if text:
-            text += "\n\n#рецепт #удмуртия #кухня"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#рецепт #удмуртия #кухня"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         # Recipe photos: use food-specific keywords for better Unsplash results
         recipe_photo_map = {
             "перепеч": ["meat pie", "pastry baked"],
@@ -768,8 +768,8 @@ class ContentGenerator:
         prompt = LIFEHACK_PROMPT.format(topic=topic)
         text = await self._ask_ai(prompt)
         if text:
-            text += "\n\n#полезно #ижевск #лайфхак"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#полезно #ижевск #лайфхак"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         lifehack_photo_map = {
             "ЖКХ": ["utility bills apartment", "apartment interior"],
             "вещи": ["donate clothes", "thrift store items"],
@@ -797,8 +797,8 @@ class ContentGenerator:
         prompt = PLACE_PROMPT.format(topic=topic)
         text = await self._ask_ai(prompt)
         if text:
-            text += "\n\n#места #удмуртия"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#места #удмуртия"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         place_photo_map = {
             "набережн": ["waterfront embankment", "river promenade"],
             "монумент": ["monument statue", "memorial sculpture"],
@@ -839,8 +839,8 @@ class ContentGenerator:
         prompt = EVENING_FUN_PROMPT.format(content_type=content_type)
         text = await self._ask_ai(prompt, temperature=0.9)
         if text:
-            text += "\n\n#вечер #ижевск #развлечения"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#вечер #ижевск #развлечения"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         fun_keywords = random.choice([
             ["happy people laughing", "friends fun"],
             ["evening city lights", "night life"],
@@ -860,8 +860,8 @@ class ContentGenerator:
         prompt = DIGEST_PROMPT.format(news_list=news_list, date=date_str)
         text = await self._ask_ai(prompt, temperature=0.3)
         if text:
-            text += "\n\n#итогидня #ижевск"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#итогидня #ижевск"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         return await self._generate_with_photo(
             text, hint_keywords=["evening cityscape", "city lights skyline"]
         )
@@ -879,8 +879,8 @@ class ContentGenerator:
         prompt = HOLIDAY_PROMPT.format(holiday_name=holiday_name, date=date_str)
         text = await self._ask_ai(prompt)
         if text:
-            text += "\n\n#праздник #ижевск"
-            text += "\n\n📲 @IzhevskTodayNews | 📩 @IzhevskTodayBot"
+            text += "\n\n─ ─ ─ ─ ─\n#праздник #ижевск"
+            text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         holiday_photo_map = {
             "Новый год": ["new year celebration", "fireworks snow"],
             "Рождество": ["christmas decoration", "winter holiday"],

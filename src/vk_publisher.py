@@ -68,13 +68,13 @@ class VKPublisher:
         # Strip the CTA footer block VK doesn't need — already shown as channel name
         # Matches lines like "😊 Подписаться в TG ...", "📱 Подписывайтесь ...", "📩 Прислать новость ...", etc.
         cta_pattern = re.compile(
-            r'\n[😊📱📩🔔💬📢]\s*(Подписа|Прислать|Читайте|IzhevskToday|NewsRussain|t\.me|vk\.com)[^\n]*',
+            r'\n[😊📱📩🔔💬📢📲🤖]\s*(Подписа|Прислать|Читайте|IzhevskToday|NewsRussain|t\.me|vk\.com|@Izhevsk)[^\n]*',
             re.IGNORECASE | re.UNICODE,
         )
         text = cta_pattern.sub('', text)
 
         # Also strip the separator line before CTA if it's now trailing
-        text = re.sub(r'\n─+\n?$', '', text)
+        text = re.sub(r'\n[─ ]+\n?$', '', text)
 
         # Clean up excessive whitespace
         text = re.sub(r'\n{3,}', '\n\n', text)
@@ -261,11 +261,12 @@ class VKPublisher:
         if len(vk_text) > 16000:
             vk_text = vk_text[:16000] + "..."
 
-        # Add clean VK footer with plain URLs (VK auto-links them)
+
+
         vk_text += (
-            "\n\n"
-            "📱 Telegram: https://t.me/IzhevskTodayNews\n"
-            "📩 Прислать новость: https://vk.com/im/convo/-236380336?entrypoint=community_page&tab=all"
+            "\n\n─ ─ ─ ─ ─\n"
+            "📱 Telegram: t.me/IzhevskTodayNews\n"
+            "📩 Прислать новость: vk.com/im/convo/-236380336"
         )
 
         params = {
