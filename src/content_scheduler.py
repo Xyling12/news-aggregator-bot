@@ -458,34 +458,50 @@ class ContentScheduler:
                     await vk.publish(text, photo_url=photo_url)
                     logger.info(f"✅ VK crosspost: {label}")
                     
-                    # ── Publish STORY if applicable ──
-                    if rubric == "weather" and weather_data:
+                    # ── Publish VK Story for ALL text-based rubrics ──
+                    # Map scheduler rubric names → story theme names
+                    _RUBRIC_TO_THEME = {
+                        "weather": "weather",
+                        "history_fact": "history",
+                        "five_facts": "five_facts",
+                        "recipe": "recipe",
+                        "lifehack": "lifehack",
+                        "place": "place",
+                        "evening_fun": "evening",
+                        "daily_digest": "digest",
+                        "holiday": "holiday",
+                    }
+                    theme_name = _RUBRIC_TO_THEME.get(rubric)
+                    if theme_name and text:
                         try:
                             if not hasattr(self, 'story_generator'):
                                 from src.story_generator import StoryGenerator
                                 self.story_generator = StoryGenerator()
+                            # Extract short headline (first sentence, max 120 chars)
+                            import re as _re2
+                            clean_txt = _re2.sub(r'<[^>]+>', '', text)  # strip HTML
+                            clean_txt = _re2.sub(r'#\S+', '', clean_txt).strip()
+                            sentences = _re2.split(r'(?<=[.!?]) +', clean_txt[:300])
+                            headline = sentences[0] if sentences else clean_txt[:120]
+                            if len(headline) > 120:
+                                headline = headline[:117] + "..."
                             
-                            now_dt = self._now()
-                            date_str = now_dt.strftime("%d %B").lstrip("0")
-                            temp_val = weather_data.get('temp', 0)
-                            temp_str = f"+{temp_val}°C" if temp_val > 0 else f"{temp_val}°C"
-                            
-                            story_bytes = await self.story_generator.generate_weather_story(
-                                bg_url=photo_url,
-                                temp_str=temp_str,
-                                desc=weather_data.get('description', '').capitalize(),
-                                date_str=date_str
-                            )
-                            if story_bytes:
-                                s_res = await vk.upload_story_photo(
-                                    story_bytes,
-                                    link_text="learn_more",
-                                    link_url="https://vk.com/izhevsk_segodnya"
+                            if len(headline) > 15:
+                                story_bytes = await self.story_generator.generate_rubric_story(
+                                    headline, rubric=theme_name, photo_url=photo_url
                                 )
-                                if s_res:
-                                    logger.info(f"✅ VK Weather Story published")
+                                if story_bytes:
+                                    s_res = await vk.upload_story_photo(
+                                        story_bytes,
+                                        link_text="learn_more",
+                                        link_url="https://vk.com/izhevsk_segodnya"
+                                    )
+                                    if s_res:
+                                        logger.info(f"✅ VK {label} Story published")
+                                    else:
+                                        logger.warning(f"VK {label} Story upload failed")
                         except Exception as s_err:
-                            logger.error(f"Failed to publish VK story: {s_err}", exc_info=True)
+                            logger.error(f"Failed to publish VK story for {rubric}: {s_err}", exc_info=True)
                             
             except Exception as vk_err:
                 logger.warning(f"VK crosspost failed for {label}: {vk_err}")
