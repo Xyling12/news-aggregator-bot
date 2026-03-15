@@ -34,7 +34,7 @@ class StoryGenerator:
         try:
             headers = {"User-Agent": "IzhevskTodayNewsBot/1.0 (VK Stories Renderer)"}
             async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=20) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.read()
                         img = Image.open(io.BytesIO(data))
@@ -162,6 +162,16 @@ class StoryGenerator:
         The Poll widget in VK stories is usually placed in the center or bottom third.
         We'll put the text in the top half.
         """
+        try:
+            return await asyncio.wait_for(self._generate_quiz_story_inner(bg_url, question), timeout=45)
+        except asyncio.TimeoutError:
+            logger.error("Quiz story generation timed out after 45s")
+            return None
+        except Exception as e:
+            logger.error(f"Quiz story generation failed: {e}")
+            return None
+
+    async def _generate_quiz_story_inner(self, bg_url: Optional[str], question: str) -> Optional[bytes]:
         W, H = 1080, 1920
         
         if bg_url:

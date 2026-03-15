@@ -327,7 +327,8 @@ class VKPublisher:
                 content_type="image/jpeg",
             )
             
-            async with self._session.post(upload_url, data=form, timeout=30) as resp:
+            session = await self._get_session()
+            async with session.post(upload_url, data=form, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 upload_result = await resp.json()
                 
             if "response" in upload_result:
@@ -394,7 +395,8 @@ class VKPublisher:
                 content_type="video/mp4",
             )
             
-            async with self._session.post(upload_url, data=form, timeout=60) as resp:
+            session = await self._get_session()
+            async with session.post(upload_url, data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
                 upload_result = await resp.json()
                 
             if "response" in upload_result:
