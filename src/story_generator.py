@@ -172,87 +172,314 @@ class StoryGenerator:
             return None
 
     async def _generate_quiz_story_inner(self, bg_url: Optional[str], question: str) -> Optional[bytes]:
+        import textwrap
+        import math
+        
         W, H = 1080, 1920
-        
-        if bg_url:
-            base_img = await self._download_image(bg_url)
-        else:
-            base_img = None
-            
-        if not base_img:
-            # Fallback to a dark blue modern gradient instead of flat color
-            base_img = Image.new("RGB", (W, H))
-            draw_bg = ImageDraw.Draw(base_img)
-            for y in range(H):
-                # Gradient from dark blue to dark purple
-                r = int(20 + (30 - 20) * (y / H))
-                g = int(25 + (20 - 25) * (y / H))
-                b = int(40 + (50 - 40) * (y / H))
-                draw_bg.line([(0, y), (W, y)], fill=(r, g, b))
 
-        base_img = self._crop_and_resize(base_img, W, H)
-        
-        # Add a stylish gradient overlay that gets darker at the top for the text
-        dark_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        draw_overlay = ImageDraw.Draw(dark_overlay)
+        # ── 1. VIBRANT GRADIENT BACKGROUND (blue → purple → magenta) ──
+        base_img = Image.new("RGBA", (W, H))
+        draw_bg = ImageDraw.Draw(base_img)
+        # Three-stop gradient: top = deep blue, middle = purple, bottom = magenta/pink
         for y in range(H):
-            # Darker at top (y=0), almost transparent at bottom (y=H)
-            alpha = int(200 - (120 * (y / H)))
-            draw_overlay.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
-            
-        base_img = base_img.convert("RGBA")
-        combined = Image.alpha_composite(base_img, dark_overlay)
-        
-        draw = ImageDraw.Draw(combined)
-        
-        try:
-            font_title = ImageFont.truetype(self.font_bold_path, 65)
-            font_q = ImageFont.truetype(self.font_bold_path, 75)
-        except:
-            font_title = font_q = ImageFont.load_default()
+            t = y / H
+            if t < 0.5:
+                # Blue → Purple
+                t2 = t * 2
+                r = int(15 + (90 - 15) * t2)
+                g = int(20 + (20 - 20) * t2)
+                b = int(120 + (160 - 120) * t2)
+            else:
+                # Purple → Magenta/Dark pink
+                t2 = (t - 0.5) * 2
+                r = int(90 + (140 - 90) * t2)
+                g = int(20 + (15 - 20) * t2)
+                b = int(160 + (120 - 160) * t2)
+            draw_bg.line([(0, y), (W, y)], fill=(r, g, b, 255))
 
-        # Helper for drawing text with shadow
-        def draw_text_with_shadow(draw_obj, pos, text, font, text_color, shadow_color=(0,0,0,200), offset=4):
+        # ── 2. DECORATIVE GLOWING ORBS ──
+        orbs_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        orb_configs = [
+            (180, 300, 200, (100, 50, 220, 25)),    # top-left purple
+            (900, 500, 160, (50, 80, 200, 20)),      # top-right blue
+            (540, 1400, 250, (180, 40, 120, 18)),    # center-bottom pink
+            (100, 1600, 180, (60, 30, 180, 15)),     # bottom-left purple
+            (950, 1700, 130, (100, 60, 200, 20)),    # bottom-right
+        ]
+        for cx, cy, radius, color in orb_configs:
+            for ring in range(radius, 0, -2):
+                alpha = int(color[3] * (ring / radius))
+                orb_draw = ImageDraw.Draw(orbs_layer)
+                orb_draw.ellipse(
+                    [(cx - ring, cy - ring), (cx + ring, cy + ring)],
+                    fill=(color[0], color[1], color[2], alpha)
+                )
+        base_img = Image.alpha_composite(base_img, orbs_layer)
+
+        # If we have a background photo, overlay it with heavy gradient blend
+        if bg_url:
+            photo = await self._download_image(bg_url)
+            if photo:
+                photo = self._crop_and_resize(photo, W, H).convert("RGBA")
+                # Make photo semi-transparent and blend
+                photo.putalpha(110)
+                base_img = Image.alpha_composite(base_img, photo)
+
+        # ── 3. SUBTLE TOP VIGNETTE for header area ──
+        vignette = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        vignette_draw = ImageDraw.Draw(vignette)
+        for y in range(400):
+            alpha = int(80 * (1 - y / 400))
+            vignette_draw.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
+        base_img = Image.alpha_composite(base_img, vignette)
+
+        combined = base_img
+        draw = ImageDraw.Draw(combined)
+
+        # ── 4. FONTS ──
+        try:
+            font_title = ImageFont.truetype(self.font_bold_path, 58)
+            font_q = ImageFont.truetype(self.font_bold_path, 52)
+            font_brand = ImageFont.truetype(self.font_reg_path, 32)
+        except:
+            font_title = font_q = font_brand = ImageFont.load_default()
+
+        # Helper for drawing text with glow + shadow
+        def draw_text_glow(draw_obj, pos, text, font, text_color, glow_color=(0, 0, 0, 120), offset=3):
             x, y = pos
-            draw_obj.text((x+offset, y+offset), text, font=font, fill=shadow_color)
+            # Soft glow (multiple offsets)
+            for dx, dy in [(-1,-1),(1,-1),(-1,1),(1,1),(0,2),(2,0)]:
+                draw_obj.text((x + dx * offset, y + dy * offset), text, font=font, fill=glow_color)
             draw_obj.text((x, y), text, font=font, fill=text_color)
 
-        # Header (Removed emoji to avoid squares, using bright accent color)
+        # ── 5. DECORATIVE LINE above header ──
+        line_y = 220
+        line_w = 200
+        draw.line([(W//2 - line_w, line_y), (W//2 + line_w, line_y)], fill=(255, 214, 0, 180), width=3)
+
+        # ── 6. HEADER ──
         header = "А ЗНАЕТЕ ЛИ ВЫ?"
         th_w = draw.textlength(header, font=font_title)
-        draw_text_with_shadow(draw, ((W - th_w) // 2, 250), header, font=font_title, text_color=(255, 214, 0, 255))
-        
-        # Word wrap for question
-        import textwrap
-        lines = textwrap.wrap(question, width=24)
-        
-        # Draw a semi-transparent rounded rectangle behind text for better readability
-        # Calculate text block height
-        line_spacing = 20
-        total_text_h = len(lines) * 90 + (len(lines) - 1) * line_spacing
-        
-        start_y = 420
-        box_padding = 50
-        box_y1 = start_y - box_padding
-        box_y2 = start_y + total_text_h + box_padding
-        
-        # Draw background bubble
-        bubble = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        bubble_draw = ImageDraw.Draw(bubble)
-        bubble_draw.rounded_rectangle([(80, box_y1), (W - 80, box_y2)], radius=30, fill=(0, 0, 0, 140), width=3, outline=(255, 255, 255, 30))
-        combined = Image.alpha_composite(combined, bubble)
+        draw_text_glow(draw, ((W - th_w) // 2, 245), header, font=font_title, text_color=(255, 214, 0, 255))
+
+        # Decorative line below header
+        draw.line([(W//2 - line_w, 325), (W//2 + line_w, 325)], fill=(255, 214, 0, 180), width=3)
+
+        # ── 7. WORD WRAP (adaptive font size) ──
+        lines = textwrap.wrap(question, width=32)
+        # If too many lines, reduce font
+        if len(lines) > 8:
+            lines = textwrap.wrap(question, width=38)
+            try:
+                font_q = ImageFont.truetype(self.font_bold_path, 44)
+            except:
+                pass
+
+        # ── 8. FROSTED GLASS CARD ──
+        line_h = 70
+        line_spacing = 12
+        total_text_h = len(lines) * line_h + (len(lines) - 1) * line_spacing
+
+        start_y = 400
+        box_padding_x = 60
+        box_padding_y = 45
+        box_x1 = 60
+        box_x2 = W - 60
+        box_y1 = start_y - box_padding_y
+        box_y2 = start_y + total_text_h + box_padding_y
+
+        # Frosted glass: multiple layers for depth
+        glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        glass_draw = ImageDraw.Draw(glass)
+        # Outer glow
+        glass_draw.rounded_rectangle(
+            [(box_x1 - 4, box_y1 - 4), (box_x2 + 4, box_y2 + 4)],
+            radius=28, fill=(255, 255, 255, 8)
+        )
+        # Main card
+        glass_draw.rounded_rectangle(
+            [(box_x1, box_y1), (box_x2, box_y2)],
+            radius=24, fill=(255, 255, 255, 22)
+        )
+        # Border
+        glass_draw.rounded_rectangle(
+            [(box_x1, box_y1), (box_x2, box_y2)],
+            radius=24, fill=None, outline=(255, 255, 255, 50), width=2
+        )
+        combined = Image.alpha_composite(combined, glass)
         draw = ImageDraw.Draw(combined)
-        
+
+        # ── 9. QUESTION TEXT ──
         y_text = start_y
         for line in lines:
             lw = draw.textlength(line, font=font_q)
-            draw_text_with_shadow(draw, ((W - lw) // 2, y_text), line, font=font_q, text_color=(255, 255, 255, 255), offset=3)
-            y_text += 90 + line_spacing
-            
-        # The bottom half is left empty/dark for the VK Poll/Link Widget
+            draw_text_glow(
+                draw, ((W - lw) // 2, y_text), line, font=font_q,
+                text_color=(255, 255, 255, 255),
+                glow_color=(0, 0, 0, 100), offset=2
+            )
+            y_text += line_h + line_spacing
+
+        # ── 10. BRAND WATERMARK at bottom ──
+        brand = "ИЖЕВСК СЕГОДНЯ"
+        bw = draw.textlength(brand, font=font_brand)
+        draw.text(((W - bw) // 2, H - 120), brand, font=font_brand, fill=(255, 255, 255, 80))
+
+        # Small decorative dot
+        draw.ellipse([(W//2 - 4, H - 80), (W//2 + 4, H - 72)], fill=(255, 214, 0, 120))
+
+        # ── OUTPUT ──
         final_img = combined.convert("RGB")
         out_bytes = io.BytesIO()
-        final_img.save(out_bytes, format="JPEG", quality=90)
+        final_img.save(out_bytes, format="JPEG", quality=92)
+        return out_bytes.getvalue()
+
+    async def generate_news_story(self, headline: str, photo_url: Optional[str] = None) -> Optional[bytes]:
+        """Generate a 1080x1920 news story with red/orange urgent theme."""
+        try:
+            return await asyncio.wait_for(
+                self._generate_news_story_inner(headline, photo_url), timeout=45
+            )
+        except asyncio.TimeoutError:
+            logger.error("News story generation timed out after 45s")
+            return None
+        except Exception as e:
+            logger.error(f"News story generation failed: {e}")
+            return None
+
+    async def _generate_news_story_inner(self, headline: str, photo_url: Optional[str] = None) -> Optional[bytes]:
+        import textwrap
+        W, H = 1080, 1920
+
+        # ── RED→DARK ORANGE GRADIENT ──
+        base_img = Image.new("RGBA", (W, H))
+        draw_bg = ImageDraw.Draw(base_img)
+        for y in range(H):
+            t = y / H
+            if t < 0.5:
+                t2 = t * 2
+                r = int(140 + (180 - 140) * t2)
+                g = int(15 + (40 - 15) * t2)
+                b = int(20 + (15 - 20) * t2)
+            else:
+                t2 = (t - 0.5) * 2
+                r = int(180 + (120 - 180) * t2)
+                g = int(40 + (20 - 40) * t2)
+                b = int(15 + (30 - 15) * t2)
+            draw_bg.line([(0, y), (W, y)], fill=(r, g, b, 255))
+
+        # ── GLOWING ORBS (warm tones) ──
+        orbs_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        orb_configs = [
+            (150, 250, 180, (220, 60, 30, 22)),
+            (920, 400, 150, (200, 80, 20, 18)),
+            (540, 1300, 220, (180, 50, 40, 16)),
+            (100, 1550, 160, (220, 40, 30, 14)),
+        ]
+        for cx, cy, radius, color in orb_configs:
+            for ring in range(radius, 0, -2):
+                alpha = int(color[3] * (ring / radius))
+                orb_draw = ImageDraw.Draw(orbs_layer)
+                orb_draw.ellipse(
+                    [(cx - ring, cy - ring), (cx + ring, cy + ring)],
+                    fill=(color[0], color[1], color[2], alpha)
+                )
+        base_img = Image.alpha_composite(base_img, orbs_layer)
+
+        # ── BACKGROUND PHOTO (if available) ──
+        if photo_url:
+            photo = await self._download_image(photo_url)
+            if photo:
+                photo = self._crop_and_resize(photo, W, H).convert("RGBA")
+                photo.putalpha(100)
+                base_img = Image.alpha_composite(base_img, photo)
+
+        # ── TOP VIGNETTE ──
+        vignette = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        vignette_draw = ImageDraw.Draw(vignette)
+        for y in range(350):
+            alpha = int(100 * (1 - y / 350))
+            vignette_draw.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
+        base_img = Image.alpha_composite(base_img, vignette)
+
+        combined = base_img
+        draw = ImageDraw.Draw(combined)
+
+        # ── FONTS ──
+        try:
+            font_label = ImageFont.truetype(self.font_bold_path, 48)
+            font_headline = ImageFont.truetype(self.font_bold_path, 56)
+            font_brand = ImageFont.truetype(self.font_reg_path, 32)
+        except:
+            font_label = font_headline = font_brand = ImageFont.load_default()
+
+        def draw_text_glow(draw_obj, pos, text, font, text_color, glow_color=(0,0,0,120), offset=3):
+            x, y = pos
+            for dx, dy in [(-1,-1),(1,-1),(-1,1),(1,1),(0,2),(2,0)]:
+                draw_obj.text((x + dx*offset, y + dy*offset), text, font=font, fill=glow_color)
+            draw_obj.text((x, y), text, font=font, fill=text_color)
+
+        # ── RED ACCENT BAR ──
+        draw.rectangle([(0, 180), (W, 188)], fill=(255, 50, 50, 200))
+
+        # ── LABEL ──
+        label = "НОВОСТИ"
+        lw = draw.textlength(label, font=font_label)
+        draw_text_glow(draw, ((W - lw) // 2, 210), label, font=font_label, text_color=(255, 80, 50, 255))
+
+        # ── BOTTOM RED BAR ──
+        draw.rectangle([(0, 280), (W, 288)], fill=(255, 50, 50, 200))
+
+        # ── HEADLINE TEXT ──
+        lines = textwrap.wrap(headline, width=28)
+        if len(lines) > 10:
+            lines = textwrap.wrap(headline, width=34)
+            try:
+                font_headline = ImageFont.truetype(self.font_bold_path, 46)
+            except:
+                pass
+
+        line_h = 75
+        line_spacing = 14
+        total_text_h = len(lines) * line_h + (len(lines) - 1) * line_spacing
+        start_y = 350
+
+        # ── FROSTED GLASS CARD ──
+        box_x1, box_x2 = 50, W - 50
+        box_y1 = start_y - 40
+        box_y2 = start_y + total_text_h + 40
+
+        glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        glass_draw = ImageDraw.Draw(glass)
+        glass_draw.rounded_rectangle(
+            [(box_x1, box_y1), (box_x2, box_y2)],
+            radius=24, fill=(0, 0, 0, 80)
+        )
+        glass_draw.rounded_rectangle(
+            [(box_x1, box_y1), (box_x2, box_y2)],
+            radius=24, fill=None, outline=(255, 80, 50, 80), width=2
+        )
+        combined = Image.alpha_composite(combined, glass)
+        draw = ImageDraw.Draw(combined)
+
+        y_text = start_y
+        for line in lines:
+            lw = draw.textlength(line, font=font_headline)
+            draw_text_glow(
+                draw, ((W - lw) // 2, y_text), line, font=font_headline,
+                text_color=(255, 255, 255, 255), glow_color=(0, 0, 0, 130), offset=2
+            )
+            y_text += line_h + line_spacing
+
+        # ── BRAND ──
+        brand = "ИЖЕВСК СЕГОДНЯ"
+        bw = draw.textlength(brand, font=font_brand)
+        draw.text(((W - bw) // 2, H - 120), brand, font=font_brand, fill=(255, 255, 255, 80))
+        draw.ellipse([(W//2 - 4, H - 80), (W//2 + 4, H - 72)], fill=(255, 80, 50, 120))
+
+        final_img = combined.convert("RGB")
+        out_bytes = io.BytesIO()
+        final_img.save(out_bytes, format="JPEG", quality=92)
         return out_bytes.getvalue()
 
     async def generate_cat_story(self) -> Optional[bytes]:

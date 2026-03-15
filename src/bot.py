@@ -32,6 +32,7 @@ from src.database import Database
 from src.ai_rewriter import AIRewriter
 from src.media_processor import MediaProcessor
 from src.vk_publisher import VKPublisher
+from src.story_generator import StoryGenerator
 from src.utils import (
     escape_html,
     clean_text,
@@ -68,6 +69,7 @@ _db: Optional[Database] = None
 _rewriter: Optional[AIRewriter] = None
 _media_processor: Optional[MediaProcessor] = None
 _vk_publisher: Optional[VKPublisher] = None
+_story_generator: Optional[StoryGenerator] = None
 _bot: Optional[Bot] = None
 
 # Rate limiting: max 3 concurrent AI calls to avoid Gemini 429 errors
@@ -1380,6 +1382,30 @@ async def _publish_post(post: dict) -> bool:
     elif _vk_publisher and not _vk_publisher.enabled:
         logger.debug("VK crosspost skipped: token or group_id not configured")
 
+    # ── Publish as VK Story ────────────────────────────────────────────────
+    if _vk_publisher and _vk_publisher.enabled and _story_generator:
+        try:
+            # Extract first sentence or first 100 chars as headline for story
+            raw_text = re.sub(r'<[^>]+>', '', text)  # strip HTML tags
+            raw_text = re.sub(r'#\S+', '', raw_text).strip()  # strip hashtags
+            # Take first sentence or first 120 chars
+            first_sentence = raw_text.split('.')[0].strip() if '.' in raw_text[:150] else raw_text[:120]
+            if len(first_sentence) > 15:  # only if headline is meaningful
+                photo_for_story = post.get("replacement_media_url")
+                story_bytes = await _story_generator.generate_news_story(
+                    first_sentence, photo_url=photo_for_story
+                )
+                if story_bytes:
+                    story_result = await _vk_publisher.upload_story_photo(story_bytes)
+                    if story_result:
+                        logger.info(f"Post #{post['id']}: VK Story published!")
+                    else:
+                        logger.warning(f"Post #{post['id']}: VK Story upload failed")
+                else:
+                    logger.warning(f"Post #{post['id']}: news story image generation failed")
+        except Exception as e:
+            logger.error(f"VK Story error for post #{post['id']}: {e}")
+
     # ── Cross-post to MAX ─────────────────────────────────────────────────
     if _max_publisher and _max_publisher.enabled:
         try:
@@ -1714,13 +1740,14 @@ async def auto_publish_loop():
 
 def create_bot(config: Config, db: Database, rewriter: AIRewriter, media_proc: MediaProcessor, vk_pub: Optional[VKPublisher] = None) -> tuple:
     """Create and configure the bot. Returns (bot, dispatcher)."""
-    global _config, _db, _rewriter, _media_processor, _vk_publisher, _bot
+    global _config, _db, _rewriter, _media_processor, _vk_publisher, _story_generator, _bot
 
     _config = config
     _db = db
     _rewriter = rewriter
     _media_processor = media_proc
     _vk_publisher = vk_pub
+    _story_generator = StoryGenerator()
 
     bot = Bot(token=config.bot_token)
     _bot = bot
