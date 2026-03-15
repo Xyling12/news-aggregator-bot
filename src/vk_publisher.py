@@ -261,8 +261,6 @@ class VKPublisher:
         if len(vk_text) > 16000:
             vk_text = vk_text[:16000] + "..."
 
-
-
         # Add clean VK footer with plain URLs (VK auto-links them)
         vk_text += (
             "\n\n"
@@ -292,6 +290,137 @@ class VKPublisher:
 
         logger.error("VK publish failed: no post_id in response")
         return None
+
+    async def upload_story_photo(self, photo_bytes: bytes, link_text: str = "", link_url: str = "") -> bool:
+        """
+        Upload a generated image (bytes) to VK Stories on behalf of the community.
+        Returns True if successful.
+        """
+        if not self.user_token:
+            logger.error("VK stories require user_token with 'stories' access scope.")
+            return False
+
+        # Step 1: Get upload server
+        params = {
+            "add_to_news": 1,
+            "group_id": abs(int(self.group_id)),
+            "_token_override": self.user_token
+        }
+        if link_text and link_url:
+            params["link_text"] = link_text
+            params["link_url"] = link_url
+            
+        upload_server = await self._api_call("stories.getPhotoUploadServer", **params)
+        if not upload_server or not upload_server.get("upload_url"):
+            logger.error("VK story upload: failed to get upload server")
+            return False
+            
+        upload_url = upload_server["upload_url"]
+
+        # Step 2: Form POST the file
+        try:
+            form = aiohttp.FormData()
+            form.add_field(
+                "file",
+                photo_bytes,
+                filename="story.jpg",
+                content_type="image/jpeg",
+            )
+            
+            async with self._session.post(upload_url, data=form, timeout=30) as resp:
+                upload_result = await resp.json()
+                
+            if "response" in upload_result:
+                upload_result = upload_result["response"]
+                
+            if not upload_result.get("upload_result"):
+                logger.error(f"VK story upload returned empty: {upload_result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"VK story upload network error: {type(e).__name__}: {e}")
+            return False
+
+        # Step 3: Save the story
+        save_result = await self._api_call(
+            "stories.save",
+            upload_results=upload_result["upload_result"],
+            _token_override=self.user_token
+        )
+        
+        if save_result and "count" in save_result:
+            logger.info("VK Story published successfully!")
+            return True
+            
+        logger.error(f"VK Story save failed: {save_result}")
+        return False
+
+    async def upload_story_video(self, video_path: str, link_text: str = "", link_url: str = "") -> bool:
+        """
+        Upload a generated video file to VK Stories on behalf of the community.
+        Returns True if successful.
+        """
+        if not self.user_token:
+            logger.error("VK stories require user_token with 'stories' access scope.")
+            return False
+
+        # Step 1: Get upload server for video
+        params = {
+            "add_to_news": 1,
+            "group_id": abs(int(self.group_id)),
+            "_token_override": self.user_token
+        }
+        if link_text and link_url:
+            params["link_text"] = link_text
+            params["link_url"] = link_url
+            
+        upload_server = await self._api_call("stories.getVideoUploadServer", **params)
+        if not upload_server or not upload_server.get("upload_url"):
+            logger.error("VK story video upload: failed to get upload server")
+            return False
+            
+        upload_url = upload_server["upload_url"]
+
+        # Step 2: Form POST the file
+        try:
+            form = aiohttp.FormData()
+            with open(video_path, 'rb') as f:
+                video_bytes = f.read()
+                
+            form.add_field(
+                "video_file",
+                video_bytes,
+                filename="story.mp4",
+                content_type="video/mp4",
+            )
+            
+            async with self._session.post(upload_url, data=form, timeout=60) as resp:
+                upload_result = await resp.json()
+                
+            if "response" in upload_result:
+                upload_result = upload_result["response"]
+                
+            if not upload_result.get("upload_result"):
+                logger.error(f"VK story video upload returned empty: {upload_result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"VK story video upload network error: {type(e).__name__}: {e}")
+            return False
+
+        # Step 3: Save the story
+        save_result = await self._api_call(
+            "stories.save",
+            upload_results=upload_result["upload_result"],
+            _token_override=self.user_token
+        )
+        
+        if save_result and "count" in save_result:
+            logger.info("VK Video Story published successfully!")
+            return True
+            
+        logger.error(f"VK Video Story save failed: {save_result}")
+        return False
 
     async def test_connection(self) -> dict:
         """Test VK API connection and return group info."""

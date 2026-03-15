@@ -72,10 +72,18 @@ class Database:
                 updated_at TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS generated_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rubric TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
             CREATE INDEX IF NOT EXISTS idx_posts_source ON posts(source_channel);
             CREATE INDEX IF NOT EXISTS idx_posts_status_created ON posts(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);
+            CREATE INDEX IF NOT EXISTS idx_generated_history_rubric ON generated_history(rubric);
         """)
         await self._db.commit()
 
@@ -381,3 +389,22 @@ class Database:
         result["by_source"] = {row["source_channel"]: row["count"] for row in rows}
 
         return result
+
+    # ── Generated History ────────────────────────────────────────────────
+
+    async def add_generated_history(self, rubric: str, topic: str):
+        """Record a generated topic to prevent repetition."""
+        await self._db.execute(
+            "INSERT INTO generated_history (rubric, topic) VALUES (?, ?)",
+            (rubric, topic),
+        )
+        await self._db.commit()
+
+    async def get_recent_generated_topics(self, rubric: str, limit: int = 60) -> List[str]:
+        """Get recently generated topics for a rubric (e.g. last 60 times = 2 months)."""
+        cursor = await self._db.execute(
+            "SELECT topic FROM generated_history WHERE rubric = ? ORDER BY created_at DESC LIMIT ?",
+            (rubric, limit),
+        )
+        rows = await cursor.fetchall()
+        return [row["topic"] for row in rows]

@@ -33,12 +33,17 @@ DEFAULT_SCHEDULE = [
     (7,  0,  "weather",       "🌤 Погода"),
     (8,  0,  "holiday",       "🎉 Праздник"),  # Only publishes if today is a holiday
     (9,  0,  "history_fact",  "📅 История"),
+    (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (11, 0,  "five_facts",    "📌 5 фактов"),
+    (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
     (13, 0,  "recipe",        "🍽 Рецепт"),
+    (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
+    (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
     (19, 0,  "evening_fun",   "😄 Вечерний"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
+    (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
 ]
 
 
@@ -191,9 +196,108 @@ class ContentScheduler:
 
         # Generate content
         text, photo_url = None, None
+        weather_data = None
+        
+        if rubric == "cat_story":
+            try:
+                import src.bot as bot_module
+                vk = getattr(bot_module, '_vk_publisher', None)
+                if vk and vk.enabled:
+                    if not hasattr(self, 'story_generator'):
+                        from src.story_generator import StoryGenerator
+                        self.story_generator = StoryGenerator()
+                    story_bytes = await self.story_generator.generate_cat_story()
+                    if story_bytes:
+                        s_res = await vk.upload_story_photo(
+                            story_bytes,
+                            link_text="learn_more",
+                            link_url="https://vk.com/izhevsk_segodnya"
+                        )
+                        if s_res:
+                            logger.info(f"✅ VK Cat Story published")
+                            return True
+            except Exception as e:
+                logger.error(f"Failed to publish VK Cat Story: {e}", exc_info=True)
+            return False
+
+        if rubric == "video_story":
+            try:
+                import src.bot as bot_module
+                vk = getattr(bot_module, '_vk_publisher', None)
+                if vk and vk.enabled:
+                    if not hasattr(self, 'story_generator'):
+                        from src.story_generator import StoryGenerator
+                        self.story_generator = StoryGenerator()
+                    
+                    # 1. Generate text using facts or lifehacks logic from ContentGenerator
+                    text, photo_url = await self.generator.generate_five_facts()
+                    import re
+                    # Extract just the first bullet point or sentence
+                    if text:
+                        match = re.search(r'1\.\s(.*?)\n', text)
+                        short_text = match.group(1) if match else "Интересно, не правда ли?"
+                    else:
+                        short_text = "Время интересных фактов об Удмуртии!"
+
+                    # 2. Get a stock video 
+                    from src.media_processor import MediaProcessor
+                    import os
+                    mp = MediaProcessor(pexels_key=os.getenv("PEXELS_API_KEY", ""))
+                    v_url = await mp.search_pexels_video(["Izhevsk", "nature", "city"], min_duration=5, max_duration=15)
+                    
+                    if v_url:
+                        vid_path = await self.story_generator.generate_video_story(v_url, short_text)
+                        
+                        # 3. Upload to VK
+                        if vid_path:
+                            s_res = await vk.upload_story_video(
+                                vid_path,
+                                link_text="learn_more",
+                                link_url="https://vk.com/izhevsk_segodnya"
+                            )
+                            if s_res:
+                                logger.info(f"✅ VK Video Story published")
+                                return True
+            except Exception as e:
+                logger.error(f"Failed to publish VK Video Story: {e}", exc_info=True)
+            return False
+
+        if rubric == "fact_story":
+            try:
+                import src.bot as bot_module
+                vk = getattr(bot_module, '_vk_publisher', None)
+                if vk and vk.enabled:
+                    if not hasattr(self, 'story_generator'):
+                        from src.story_generator import StoryGenerator
+                        self.story_generator = StoryGenerator()
+                    
+                    text, photo_url = await self.generator.generate_history_fact()
+                    import re
+                    # Pluck a short sentence from the fact
+                    sentences = re.split(r'(?<=[.!?]) +', text.replace('\n', ' ')) if text else []
+                    short_text = sentences[1] if len(sentences) > 1 else (sentences[0] if sentences else "Ижевск — город тружеников!")
+                    
+                    story_bytes = await self.story_generator.generate_quiz_story(photo_url, short_text)
+                    if story_bytes:
+                        s_res = await vk.upload_story_photo(
+                            story_bytes,
+                            link_text="learn_more",
+                            link_url="https://vk.com/izhevsk_segodnya"
+                        )
+                        if s_res:
+                            logger.info(f"✅ VK Fact Story published")
+                            return True
+            except Exception as e:
+                logger.error(f"Failed to publish VK Fact Story: {e}", exc_info=True)
+            return False
 
         if rubric == "weather":
-            text, photo_url = await self.generator.generate_weather()
+            res = await self.generator.generate_weather()
+            if res:
+                if len(res) == 3:
+                    text, photo_url, weather_data = res
+                else:
+                    text, photo_url = res
         elif rubric == "holiday":
             text, photo_url = await self.generator.generate_holiday()
             if not text:  # Not a holiday today — skip silently
@@ -353,6 +457,36 @@ class ContentScheduler:
                 if vk and vk.enabled:
                     await vk.publish(text, photo_url=photo_url)
                     logger.info(f"✅ VK crosspost: {label}")
+                    
+                    # ── Publish STORY if applicable ──
+                    if rubric == "weather" and weather_data:
+                        try:
+                            if not hasattr(self, 'story_generator'):
+                                from src.story_generator import StoryGenerator
+                                self.story_generator = StoryGenerator()
+                            
+                            now_dt = self._now()
+                            date_str = now_dt.strftime("%d %B").lstrip("0")
+                            temp_val = weather_data.get('temp', 0)
+                            temp_str = f"+{temp_val}°C" if temp_val > 0 else f"{temp_val}°C"
+                            
+                            story_bytes = await self.story_generator.generate_weather_story(
+                                bg_url=photo_url,
+                                temp_str=temp_str,
+                                desc=weather_data.get('description', '').capitalize(),
+                                date_str=date_str
+                            )
+                            if story_bytes:
+                                s_res = await vk.upload_story_photo(
+                                    story_bytes,
+                                    link_text="learn_more",
+                                    link_url="https://vk.com/izhevsk_segodnya"
+                                )
+                                if s_res:
+                                    logger.info(f"✅ VK Weather Story published")
+                        except Exception as s_err:
+                            logger.error(f"Failed to publish VK story: {s_err}", exc_info=True)
+                            
             except Exception as vk_err:
                 logger.warning(f"VK crosspost failed for {label}: {vk_err}")
 

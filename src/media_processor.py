@@ -411,6 +411,71 @@ class MediaProcessor:
 
         return results
 
+    async def search_pexels_video(self, keywords: List[str], min_duration: int = 5, max_duration: int = 20) -> Optional[str]:
+        """Search Pexels for short vertical/square portrait videos. Requires PEXELS_API_KEY.
+        
+        Returns the direct URL to the MP4 file, or None if not found/no key.
+        """
+        if not self.pexels_key:
+            logger.debug("Pexels Video: no API key configured, skipping")
+            return None
+
+        query = " ".join(keywords[:3])
+        if not query:
+            query = "nature"
+
+        try:
+            headers = {
+                "Authorization": self.pexels_key,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            }
+            proxy_url = os.getenv("PEXELS_PROXY", "")
+            if proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"):
+                connector = ProxyConnector.from_url(proxy_url)
+                session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
+            else:
+                session_ctx = aiohttp.ClientSession(headers=headers)
+                
+            async with session_ctx as session:
+                params = {
+                    "query": query,
+                    "per_page": 10,
+                    "orientation": "portrait",
+                }
+                async with session.get(
+                    "https://api.pexels.com/videos/search",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        videos = data.get("videos", [])
+                        
+                        import random
+                        random.shuffle(videos)
+                        
+                        for vid in videos:
+                            duration = vid.get("duration", 0)
+                            if min_duration <= duration <= max_duration:
+                                files = vid.get("video_files", [])
+                                # Get HD vertical file if possible
+                                if files:
+                                    # Sort by quality
+                                    files.sort(key=lambda f: f.get("width", 0), reverse=True)
+                                    return files[0].get("link")
+                                    
+                        # If no strict duration match, take the first one
+                        if videos and videos[0].get("video_files"):
+                            return videos[0]["video_files"][0].get("link")
+                            
+                    else:
+                        logger.error(f"Pexels Video API {resp.status}")
+                        
+        except Exception as e:
+            logger.error(f"Pexels Video search failed: {e}")
+
+        return None
+
     async def download_stock_photo(self, photo_url: str, filename: str) -> Optional[str]:
         """Download a stock photo and save it locally.
 

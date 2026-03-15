@@ -530,7 +530,7 @@ class ContentGenerator:
 
     # ── Rubric Methods ── each returns (text, photo_url) ─────────────────
 
-    async def generate_weather(self) -> Tuple[Optional[str], Optional[str]]:
+    async def generate_weather(self) -> Tuple[Optional[str], Optional[str], Optional[dict]]:
         """Generate weather post using real weather APIs (no AI hallucination).
 
         Priority:
@@ -644,12 +644,12 @@ class ContentGenerator:
 
         # ── All APIs failed — do NOT invent weather ───────────────────────
         logger.error("All weather APIs failed — skipping weather post to avoid fake data")
-        return None, None
+        return None, None, None
 
     async def _build_weather_post(
         self, temp: int, feels_like: int, description: str,
         wind: float, humidity: int, pressure: int,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> Tuple[Optional[str], Optional[str], Optional[dict]]:
         """Build the weather post text from real weather data using AI for natural language."""
         now = datetime.now()
         date_str = now.strftime("%d %B").lstrip("0")
@@ -681,7 +681,13 @@ class ContentGenerator:
         else:
             weather_keywords = ["winter city morning", "cold weather season"]
 
-        return await self._generate_with_photo(text, hint_keywords=weather_keywords)
+        text, photo_url = await self._generate_with_photo(text, hint_keywords=weather_keywords)
+        weather_data = {
+            "temp": temp,
+            "feels_like": feels_like,
+            "description": description,
+        }
+        return text, photo_url, weather_data
 
     async def generate_history_fact(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate 'This day in history' post."""
