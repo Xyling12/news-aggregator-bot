@@ -500,15 +500,10 @@ class ContentGenerator:
                     if any(kw.lower() in desc for kw in keywords[:3]):
                         logger.info(f"Photo selected: keyword match in description (keywords={keywords[:3]})")
                         return candidate["url"]
-                # For Pexels results: Pexels 'alt' field is always relevant, trust it
-                if photos[0].get("source") == "pexels":
-                    logger.info(f"Photo selected: Pexels result (query-based, keywords={keywords[:3]})")
-                    return photos[0]["url"]
-                # No keyword match and not Pexels — skip to avoid irrelevant photo
-                logger.info(
-                    f"Photo search: {len(photos)} results but no keyword match — "
-                    f"skipping to avoid irrelevant photo (keywords={keywords[:3]})"
-                )
+                # No keyword match in description — take first result anyway
+                # (better to have a loosely related photo than no photo at all)
+                logger.info(f"Photo selected: best available (no exact keyword match, keywords={keywords[:3]})")
+                return photos[0]["url"]
         except Exception as e:
             logger.error(f"Photo search failed ({keywords}): {e}")
 
