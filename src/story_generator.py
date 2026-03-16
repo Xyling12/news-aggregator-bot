@@ -4,6 +4,7 @@ Story Generator — Creates 9:16 vertical images and videos for VK Stories.
 
 import os
 import io
+import re
 import logging
 import asyncio
 import aiohttp
@@ -11,6 +12,33 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Emoji removal regex ──────────────────────────────────────────────────
+# Covers all common emoji Unicode ranges. Roboto font doesn't have emoji
+# glyphs, so they render as □ boxes in PIL.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # misc symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map
+    "\U0001F1E0-\U0001F1FF"  # flags
+    "\U0001F900-\U0001F9FF"  # supplemental symbols
+    "\U0001FA00-\U0001FA6F"  # chess, extended-A
+    "\U0001FA70-\U0001FAFF"  # extended-B
+    "\U00002702-\U000027B0"  # dingbats
+    "\U000024C2-\U0001F251"  # enclosed chars
+    "\U0000FE0F"             # variation selector-16
+    "\U0000200D"             # ZWJ
+    "\U00002600-\U000026FF"  # misc symbols (☀, ⛅, etc.)
+    "\U00002B50-\U00002B55"  # stars
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emoji(text: str) -> str:
+    """Remove emoji characters that Roboto can't render."""
+    return _EMOJI_RE.sub("", text).strip()
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
 FONT_REGULAR = os.path.join(ASSETS_DIR, "Roboto-Regular.ttf")
@@ -239,6 +267,8 @@ class StoryGenerator:
         self, text: str, rubric: str, photo_url: Optional[str]
     ) -> Optional[bytes]:
         import textwrap
+        # Strip emoji — Roboto font can't render them (shows □ boxes)
+        text = _strip_emoji(text)
         W, H = 1080, 1920
 
         theme = RUBRIC_THEMES.get(rubric, RUBRIC_THEMES["fact"])
