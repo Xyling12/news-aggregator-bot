@@ -242,12 +242,48 @@ class StoryGenerator:
         final_img.save(out_bytes, format="JPEG", quality=92)
         return out_bytes.getvalue()
 
+    # ── Per-rubric fallback photo keywords ────────────────────────────────
+    # Used when caller passes photo_url=None (e.g. Wikimedia search failed upstream)
+    _RUBRIC_PHOTO_FALLBACK: dict = {
+        "weather":    ["izhevsk city winter", "russian city skyline"],
+        "history":    ["old russian city historical", "sepia vintage"],
+        "five_facts": ["izhevsk udmurtia nature", "russian landscape"],
+        "recipe":     ["russian food cooking", "homemade dish"],
+        "lifehack":   ["city life russia", "people street"],
+        "place":      ["udmurtia nature landscape", "russia park"],
+        "evening":    ["city night lights", "russia evening"],
+        "digest":     ["izhevsk city news", "urban russia"],
+        "holiday":    ["russian celebration holiday", "festive decoration"],
+        "fact":       ["russia nature landscape", "architecture"],
+        "news":       ["izhevsk city street", "russia news"],
+    }
+
     # ── Universal rubric story generator ─────────────────────────────────
 
     async def generate_rubric_story(
         self, text: str, rubric: str = "fact", photo_url: Optional[str] = None
     ) -> Optional[bytes]:
         """Generate a themed 1080x1920 story for any rubric."""
+
+        # If no photo provided, try to fetch one ourselves before rendering
+        if not photo_url:
+            try:
+                from src.media_processor import MediaProcessor
+                import os
+                mp = MediaProcessor(
+                    pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                    pixabay_key=os.getenv("PIXABAY_API_KEY", ""),
+                )
+                keywords = self._RUBRIC_PHOTO_FALLBACK.get(rubric, ["russia city", "landscape"])
+                photos = await mp.search_stock_photo(keywords, count=3)
+                if photos:
+                    photo_url = photos[0]["url"]
+                    logger.info(f"Story fallback photo found for rubric '{rubric}': {photo_url[:60]}")
+                else:
+                    logger.info(f"Story: no fallback photo found for rubric '{rubric}', using gradient")
+            except Exception as ph_err:
+                logger.warning(f"Story fallback photo search failed: {ph_err}")
+
         try:
             return await asyncio.wait_for(
                 self._generate_rubric_story_inner(text, rubric, photo_url), timeout=45
