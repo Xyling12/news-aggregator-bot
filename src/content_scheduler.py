@@ -206,7 +206,7 @@ class ContentScheduler:
                     if not hasattr(self, 'story_generator'):
                         from src.story_generator import StoryGenerator
                         self.story_generator = StoryGenerator()
-                    story_bytes = await self.story_generator.generate_cat_story()
+                    story_bytes = await self.story_generator.generate_cat_story(hour=self._now().hour)
                     if story_bytes:
                         s_res = await vk.upload_story_photo(
                             story_bytes,

@@ -31,6 +31,11 @@ _EMOJI_RE = re.compile(
     "\U0000200D"             # ZWJ
     "\U00002600-\U000026FF"  # misc symbols (☀, ⛅, etc.)
     "\U00002B50-\U00002B55"  # stars
+    "\U000020E3"             # combining enclosing keycap (for 1️⃣ etc.)
+    "\U000000A9"             # ©
+    "\U000000AE"             # ®
+    "\U0000203C-\U00003299"  # misc symbols & CJK (‼, ™, ℹ, etc.)
+    "\U00010000-\U0001FFFF"  # catch-all supplemental planes
     "]+",
     flags=re.UNICODE,
 )
@@ -231,20 +236,11 @@ class StoryGenerator:
         self._draw_rounded_rectangle(draw, (box_x1, box_y1, box_x2, box_y2), 40, fill=(0, 0, 0, 150))
         draw.text(((W - desc_w) // 2, box_y1 + box_padding_y), desc, font=font_desc, fill=(255, 255, 255, 255))
 
-        # Bottom text prompt (optional, maybe "Смахивай вверх чтобы почитать новости")
-        bottom_text = "Подробнее о погоде и новостях города"
-        current_ratio = w / h
-
-        if current_ratio > target_ratio:
-            new_w = int(h * target_ratio)
-            left = (w - new_w) // 2
-            img = img.crop((left, 0, left + new_w, h))
-        elif current_ratio < target_ratio:
-            new_h = int(w / target_ratio)
-            top = (h - new_h) // 2
-            img = img.crop((0, top, w, top + new_h))
-
-        return img.resize((target_w, target_h), Image.LANCZOS)
+        # ── OUTPUT ──
+        final_img = combined.convert("RGB")
+        out_bytes = io.BytesIO()
+        final_img.save(out_bytes, format="JPEG", quality=92)
+        return out_bytes.getvalue()
 
     # ── Universal rubric story generator ─────────────────────────────────
 
@@ -313,13 +309,17 @@ class StoryGenerator:
                 )
         base_img = Image.alpha_composite(base_img, orbs_layer)
 
-        # ── 3. BACKGROUND PHOTO ──
+        # ── 3. BACKGROUND PHOTO (primary — photo is the main visual) ──
         if photo_url:
             photo = await self._download_image(photo_url)
             if photo:
                 photo = self._crop_and_resize(photo, W, H).convert("RGBA")
-                photo.putalpha(110)
+                # Photo is the PRIMARY background — high opacity (200/255 ≈ 78%)
+                photo.putalpha(200)
                 base_img = Image.alpha_composite(base_img, photo)
+                # Add a colored tint overlay so gradient theme is still felt
+                tint = Image.new("RGBA", (W, H), (*gm, 80))
+                base_img = Image.alpha_composite(base_img, tint)
 
         # ── 4. TOP VIGNETTE ──
         vignette = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -428,23 +428,45 @@ class StoryGenerator:
         """Generate a breaking news story (red theme)."""
         return await self.generate_rubric_story(headline, rubric="news", photo_url=photo_url)
 
-    async def generate_cat_story(self) -> Optional[bytes]:
+    async def generate_cat_story(self, hour: int = -1) -> Optional[bytes]:
         """
-        Fetch a random cat from TheCatAPI, crop to 9:16, add a subtle funny text if possible.
-        """
-        W, H = 1080, 1920
-        # Get random cat photo that is reasonably tall
-        cat_api_url = "https://api.thecatapi.com/v1/images/search"
+        Fetch a random cat from TheCatAPI, crop to 9:16, add time-appropriate text.
         
+        Args:
+            hour: Current hour (0-23) in local timezone. Used to pick appropriate
+                  greeting text (morning/afternoon/night). Default -1 = auto-detect.
+        """
+        from datetime import datetime, timezone, timedelta
+        W, H = 1080, 1920
+
+        # Auto-detect hour if not provided
+        if hour < 0:
+            tz_izhevsk = timezone(timedelta(hours=4))
+            hour = datetime.now(tz_izhevsk).hour
+
+        # Request full-size high-quality photos, no GIFs
+        cat_api_url = (
+            "https://api.thecatapi.com/v1/images/search"
+            "?limit=10&mime_types=image/jpeg,image/png&size=full"
+        )
+
+        cat_img_url = None
         try:
             headers = {"User-Agent": "IzhevskTodayNewsBot/1.0"}
             async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(cat_api_url, timeout=10) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        cat_img_url = data[0]["url"]
-                    else:
-                        cat_img_url = None
+                        candidates = await resp.json()
+                        # Only high-res photos (min 800px on shortest side)
+                        hq = [c for c in candidates
+                              if min(c.get("width", 0), c.get("height", 0)) >= 800]
+                        pool = hq if hq else candidates
+                        # Prefer horizontal/square — crop better to 9:16
+                        wide = [c for c in pool if c.get("width", 0) >= c.get("height", 1)]
+                        pool = wide if wide else pool
+                        if pool:
+                            import random as _r
+                            cat_img_url = _r.choice(pool[:5])["url"]
         except Exception as e:
             logger.error(f"Failed to fetch cat API: {e}")
             cat_img_url = None
@@ -476,16 +498,31 @@ class StoryGenerator:
         except:
             font_title = ImageFont.load_default()
 
-        # Fun text options without emojis for PIL safety
+        # Time-aware text selection (no emojis for PIL safety)
         import random
-        texts = [
-            "Всем хорошего дня!",
-            "Время немножко отдохнуть",
-            "Пуньк!",
-            "Спокойной ночи, Ижевск!",
-            "Котиков много не бывает",
-            "Мяу!"
-        ]
+        if hour >= 20:  # Evening/night (22:00 slot)
+            texts = [
+                "Спокойной ночи, Ижевск!",
+                "Сладких снов!",
+                "Добрых снов, Ижевск!",
+                "Ночь. Котики. Покой.",
+            ]
+        elif hour >= 12:  # Afternoon (14:00 slot)
+            texts = [
+                "Время немножко отдохнуть",
+                "Котиков много не бывает",
+                "Пуньк!",
+                "Мяу!",
+                "Обеденный котик!",
+            ]
+        else:  # Morning (10:00 slot)
+            texts = [
+                "Всем хорошего дня!",
+                "Доброе утро, Ижевск!",
+                "Котиков много не бывает",
+                "Мяу!",
+                "Пуньк!",
+            ]
         text_str = random.choice(texts)
         tw = draw.textlength(text_str, font=font_title)
         draw.text(((W - tw) // 2, 1600), text_str, font=font_title, fill=(255, 255, 255, 255))
@@ -521,6 +558,8 @@ class StoryGenerator:
             # We need to scale/crop to exactly 1080x1920.
             # -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,colorchannelmixer=r=.6:g=.6:b=.6,drawtext=..."
             
+            # Strip emoji — Roboto font can't render them in ffmpeg either
+            text = _strip_emoji(text)
             # Prepare text for ffmpeg drawtext (escape colons, backslashes and single quotes)
             safe_text = text.replace('\\', '\\\\').replace(':', '\\:').replace("'", "'\\''")
             
@@ -554,8 +593,13 @@ class StoryGenerator:
             # so we explicitly take the video stream 'v' from the filter output.
             out = ffmpeg.output(stream, output_path, vcodec='libx264', pix_fmt='yuv420p', crf=23, acodec='aac')
             
-            # Run
-            ffmpeg.run(out, overwrite_output=True, capture_stdout=True, capture_stderr=True)
+            # Run in executor to avoid blocking the asyncio event loop
+            loop = asyncio.get_event_loop()
+            _out = out
+            await loop.run_in_executor(
+                None,
+                lambda: ffmpeg.run(_out, overwrite_output=True, capture_stdout=True, capture_stderr=True)
+            )
             
             # Cleanup temp input
             try:
