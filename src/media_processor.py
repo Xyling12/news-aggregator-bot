@@ -144,7 +144,7 @@ class MediaProcessor:
                         "list": "search",
                         "srsearch": q,
                         "srnamespace": "6",        # NS 6 = File:
-                        "srlimit": str(count * 3), # fetch extra — many will be SVG/audio
+                        "srlimit": str(min(count * 6, 30)),  # more candidates for strict filtering
                         "srwhat": "text",
                         "format": "json",
                     }
@@ -203,6 +203,16 @@ class MediaProcessor:
                         return []
                     data = await resp.json()
 
+                # Filenames that indicate low-quality / irrelevant file types
+                _BAD_FILENAME_WORDS = {
+                    "plaque", "tablet", "tablica", "sign", "inscription",
+                    "memorial", "monument", "logo", "coat", "arm", "герб",
+                    "табличк", "надпись", "значок", "эмблем", "stamp",
+                    "diagram", "схем", "map", "карт", "chart", "graph",
+                    "screenshot", "скриншот", "scan", "скан", "postcard",
+                    "открытк",
+                }
+
                 pages = data.get("query", {}).get("pages", {}).values()
                 for page in pages:
                     if len(results) >= count:
@@ -224,11 +234,23 @@ class MediaProcessor:
                     if not full_url:
                         continue
 
-                    # Skip low-resolution images (thumbnails, old scans, screenshots)
+                    # Skip bad filenames (tablets, plaques, logos, diagrams)
+                    fname_lower = (page.get("title", "") + full_url).lower()
+                    if any(bad in fname_lower for bad in _BAD_FILENAME_WORDS):
+                        logger.debug(f"Wikimedia: skipping bad filename {page.get('title', '')}")
+                        continue
+
+                    # Require high resolution — no old scans or small photos
                     width = info.get("width", 0)
                     height = info.get("height", 0)
-                    if width < 600 or height < 400:
-                        logger.debug(f"Wikimedia: skipping small image {width}x{height}")
+                    if width < 1200 or height < 700:
+                        logger.debug(f"Wikimedia: skipping low-res {width}x{height}")
+                        continue
+
+                    # Require landscape orientation (width > height * 0.6)
+                    # — portrait shots of signs/plaques filtered out
+                    if height > 0 and width / height < 0.8:
+                        logger.debug(f"Wikimedia: skipping portrait-oriented {width}x{height}")
                         continue
 
                     # Extract author and description from extmetadata
