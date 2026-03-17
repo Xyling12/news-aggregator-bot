@@ -350,6 +350,7 @@ class MediaProcessor:
 
         Free API — 200 requests/hour. Register at https://www.pexels.com/api/
         Excellent photo quality, supports Russian queries.
+        Auto-falls back to direct connection if proxy fails.
         """
         if not self.pexels_key:
             logger.debug("Pexels: no API key configured, skipping")
@@ -358,22 +359,26 @@ class MediaProcessor:
         query = " ".join(keywords[:4])
         results = []
 
-        try:
-            headers = {
-                "Authorization": self.pexels_key,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            }
-            proxy_url = os.getenv("PEXELS_PROXY", "")
-            if proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"):
+        headers = {
+            "Authorization": self.pexels_key,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        proxy_url = os.getenv("PEXELS_PROXY", "").strip()
+        use_proxy = bool(proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"))
+
+        async def _do_request(with_proxy: bool) -> List[dict]:
+            if with_proxy:
                 connector = ProxyConnector.from_url(proxy_url)
                 session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
                 logger.debug(f"Pexels: using SOCKS5 proxy {proxy_url[:30]}...")
             else:
                 session_ctx = aiohttp.ClientSession(headers=headers)
+
+            found = []
             async with session_ctx as session:
                 params = {
                     "query": query,
-                    "per_page": count + 5,   # fetch extra to filter
+                    "per_page": count + 5,
                     "orientation": "landscape",
                     "locale": "ru-RU",
                 }
@@ -386,14 +391,12 @@ class MediaProcessor:
                         data = await resp.json()
                         all_photos = data.get("photos", [])
 
-                        # Deprioritize photos with people when query doesn't ask for people
                         people_words = {"people", "person", "man", "woman", "group",
                                         "team", "couple", "family", "children", "russian"}
                         query_words = set(query.lower().split())
                         query_wants_people = bool(query_words & people_words)
 
                         if not query_wants_people and len(all_photos) > 1:
-                            # Sort: photos without people-related alt text first
                             people_alt = {"people", "person", "man", "woman", "group",
                                           "team", "couple", "meeting", "coworkers"}
                             all_photos.sort(key=lambda p: any(
@@ -402,20 +405,17 @@ class MediaProcessor:
                             ))
 
                         for photo in all_photos[:count]:
-                            # Use 'large' size — good quality, reasonable file size
                             url = photo.get("src", {}).get("large", "")
                             if not url:
                                 continue
-                            results.append({
+                            found.append({
                                 "url": url,
                                 "thumb_url": photo.get("src", {}).get("medium", url),
                                 "description": photo.get("alt", "") or query,
                                 "author": photo.get("photographer", "Pexels"),
                                 "source": "pexels",
                             })
-                        logger.info(
-                            f"Pexels: found {len(results)} photos for '{query}'"
-                        )
+                        logger.info(f"Pexels: found {len(found)} photos for '{query}'")
                     elif resp.status == 429:
                         logger.warning("Pexels: rate limit exceeded (200 req/hour)")
                     elif resp.status == 401:
@@ -423,13 +423,21 @@ class MediaProcessor:
                     else:
                         body = await resp.text()
                         logger.error(f"Pexels API {resp.status}: {body[:200]}")
+            return found
 
+        try:
+            results = await _do_request(with_proxy=use_proxy)
         except asyncio.TimeoutError:
             logger.error("Pexels API timeout (>15s)")
-        except aiohttp.ClientError as e:
-            logger.error(f"Pexels network error: {type(e).__name__}: {e}")
         except Exception as e:
-            logger.error(f"Pexels search failed: {type(e).__name__}: {e}")
+            if use_proxy:
+                logger.warning(f"Pexels proxy failed ({type(e).__name__}: {e}) — retrying direct")
+                try:
+                    results = await _do_request(with_proxy=False)
+                except Exception as e2:
+                    logger.error(f"Pexels direct also failed: {type(e2).__name__}: {e2}")
+            else:
+                logger.error(f"Pexels search failed: {type(e).__name__}: {e}")
 
         return results
 
@@ -457,24 +465,21 @@ class MediaProcessor:
         query = " ".join(keywords[:3]) or "animals"
         exclude_ids = set(exclude_ids or [])
 
-        try:
-            headers = {
-                "Authorization": self.pexels_key,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            }
-            proxy_url = os.getenv("PEXELS_PROXY", "")
-            if proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"):
-                connector = ProxyConnector.from_url(proxy_url)
-                session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
-            else:
-                session_ctx = aiohttp.ClientSession(headers=headers)
+        headers = {
+            "Authorization": self.pexels_key,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        }
+        proxy_url = os.getenv("PEXELS_PROXY", "").strip()
+        use_proxy = bool(proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"))
 
-            async with session_ctx as session:
-                params = {
-                    "query": query,
-                    "per_page": 15,          # more candidates → better quality selection
-                    "orientation": "portrait",
-                }
+        async def _fetch_videos(with_proxy: bool):
+            if with_proxy:
+                connector = ProxyConnector.from_url(proxy_url)
+                sess = aiohttp.ClientSession(connector=connector, headers=headers)
+            else:
+                sess = aiohttp.ClientSession(headers=headers)
+            async with sess as session:
+                params = {"query": query, "per_page": 15, "orientation": "portrait"}
                 async with session.get(
                     "https://api.pexels.com/videos/search",
                     params=params,
@@ -483,64 +488,71 @@ class MediaProcessor:
                     if resp.status != 200:
                         logger.error(f"Pexels Video API {resp.status}")
                         return None
-                    data = await resp.json()
+                    return (await resp.json()).get("videos", [])
 
-            videos = data.get("videos", [])
-            import random
-            random.shuffle(videos)
-
-            def _best_hd_file(files: list) -> Optional[str]:
-                """Return URL of the best HD file, or None if nothing meets threshold."""
-                # Filter: min resolution on longer side, skip obvious low-quality tags
-                _bad_quality = {"sd", "360p", "240p"}
-                hd_files = [
-                    f for f in files
-                    if max(f.get("width", 0), f.get("height", 0)) >= min_quality_px
-                    and f.get("quality", "").lower() not in _bad_quality
-                ]
-                if not hd_files:
+        try:
+            videos = await _fetch_videos(with_proxy=use_proxy)
+        except Exception as e:
+            if use_proxy:
+                logger.warning(f"Pexels Video proxy failed ({e}) — retrying direct")
+                try:
+                    videos = await _fetch_videos(with_proxy=False)
+                except Exception as e2:
+                    logger.error(f"Pexels Video direct also failed: {e2}")
                     return None
-                # Sort by pixel count descending → pick highest resolution
-                hd_files.sort(
-                    key=lambda f: f.get("width", 0) * f.get("height", 0),
-                    reverse=True,
-                )
-                return hd_files[0].get("link")
+            else:
+                logger.error(f"Pexels Video search failed: {e}")
+                return None
 
-            # Pass 1: duration filter + HD + not already used
-            for vid in videos:
-                vid_id = vid.get("id")
-                if vid_id in exclude_ids:
-                    continue
-                duration = vid.get("duration", 0)
-                if min_duration <= duration <= max_duration:
-                    url = _best_hd_file(vid.get("video_files", []))
-                    if url:
-                        logger.info(
-                            f"Pexels Video: selected id={vid_id} "
-                            f"duration={duration}s quality=HD query='{query}'"
-                        )
-                        return (vid_id, url)
+        if not videos:
+            logger.warning(f"Pexels Video: no results for '{query}'")
+            return None
 
-            # Pass 2: relax duration, still require HD
-            for vid in videos:
-                vid_id = vid.get("id")
-                if vid_id in exclude_ids:
-                    continue
+        import random
+        random.shuffle(videos)
+
+        def _best_hd_file(files: list) -> Optional[str]:
+            """Return URL of the best HD file, or None if nothing meets threshold."""
+            _bad_quality = {"sd", "360p", "240p"}
+            hd_files = [
+                f for f in files
+                if max(f.get("width", 0), f.get("height", 0)) >= min_quality_px
+                and f.get("quality", "").lower() not in _bad_quality
+            ]
+            if not hd_files:
+                return None
+            hd_files.sort(
+                key=lambda f: f.get("width", 0) * f.get("height", 0),
+                reverse=True,
+            )
+            return hd_files[0].get("link")
+
+        # Pass 1: duration filter + HD + not already used
+        for vid in videos:
+            vid_id = vid.get("id")
+            if vid_id in exclude_ids:
+                continue
+            duration = vid.get("duration", 0)
+            if min_duration <= duration <= max_duration:
                 url = _best_hd_file(vid.get("video_files", []))
                 if url:
                     logger.info(
-                        f"Pexels Video: relaxed-duration id={vid_id} query='{query}'"
+                        f"Pexels Video: selected id={vid_id} "
+                        f"duration={duration}s quality=HD query='{query}'"
                     )
                     return (vid_id, url)
 
-            logger.warning(f"Pexels Video: no HD results for '{query}'")
+        # Pass 2: relax duration, still require HD
+        for vid in videos:
+            vid_id = vid.get("id")
+            if vid_id in exclude_ids:
+                continue
+            url = _best_hd_file(vid.get("video_files", []))
+            if url:
+                logger.info(f"Pexels Video: relaxed-duration id={vid_id} query='{query}'")
+                return (vid_id, url)
 
-        except asyncio.TimeoutError:
-            logger.error("Pexels Video API timeout (>15s)")
-        except Exception as e:
-            logger.error(f"Pexels Video search failed: {e}")
-
+        logger.warning(f"Pexels Video: no HD results for '{query}'")
         return None
 
 
