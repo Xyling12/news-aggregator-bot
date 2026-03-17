@@ -1615,23 +1615,17 @@ async def process_new_post(post_id: int):
                 stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
 
                 if stock_photos:
-                    # Take FIRST result — Wikimedia already sorts by relevance
-                    # Skip if description doesn't share ANY keyword (basic sanity check)
+                    # Take FIRST result — Pexels/Wikimedia already sorts by relevance.
+                    # kw_match is used only for logging — NOT as a barrier.
+                    # Wikimedia often has empty descriptions, causing false "mismatch".
                     best = stock_photos[0]
-                    desc_lower = (best.get("description", "") + " " + " ".join(keywords)).lower()
-                    # Accept if ≥1 keyword appears in description or title
-                    kw_match = any(kw.lower() in desc_lower for kw in keywords[:3])
-                    if kw_match or post.get("has_watermark"):
-                        stock_url = best["url"]
-                        logger.info(
-                            f"Post #{post_id}: stock photo selected "
-                            f"(kw_match={kw_match}, keywords={keywords[:3]})"
-                        )
-                    else:
-                        logger.info(
-                            f"Post #{post_id}: stock photo description mismatch — "
-                            f"publishing text-only (keywords={keywords[:3]})"
-                        )
+                    desc = best.get("description", "")
+                    kw_match = any(kw.lower() in desc.lower() for kw in keywords[:3]) if desc else False
+                    stock_url = best["url"]
+                    logger.info(
+                        f"Post #{post_id}: stock photo selected from {best.get('source', 'unknown')} "
+                        f"(kw_match={kw_match}, keywords={keywords[:3]})"
+                    )
                 else:
                     logger.info(f"Post #{post_id}: no stock photos found — publishing text-only")
             else:

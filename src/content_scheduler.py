@@ -239,10 +239,13 @@ class ContentScheduler:
                     else:
                         short_text = "Время интересных фактов об Удмуртии!"
 
-                    # 2. Get a stock video 
+                    # 2. Get a stock video — use PEXELS_PROXY from env if set
                     from src.media_processor import MediaProcessor
                     import os
-                    mp = MediaProcessor(pexels_key=os.getenv("PEXELS_API_KEY", ""))
+                    mp = MediaProcessor(
+                        pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                        media_dir=self.config.media_dir,
+                    )
                     v_url = await mp.search_pexels_video(["Izhevsk", "nature", "city"], min_duration=5, max_duration=15)
                     
                     if v_url:
@@ -274,8 +277,13 @@ class ContentScheduler:
                     text, photo_url = await self.generator.generate_history_fact()
                     import re
                     # Pluck a short sentence from the fact
+                    # Pluck first meaningful sentence as short caption
                     sentences = re.split(r'(?<=[.!?]) +', text.replace('\n', ' ')) if text else []
-                    short_text = sentences[1] if len(sentences) > 1 else (sentences[0] if sentences else "Ижевск — город тружеников!")
+                    # Take first non-empty sentence ≥ 10 chars; fallback to full first 100 chars
+                    short_text = next(
+                        (s for s in sentences if len(s) >= 10),
+                        text[:100] if text else "Ижевск — город тружеников!"
+                    )
                     
                     story_bytes = await self.story_generator.generate_quiz_story(photo_url, short_text)
                     if story_bytes:

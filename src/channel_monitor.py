@@ -233,7 +233,10 @@ class ChannelMonitor:
             media_type = "none"
             media_url = None
 
-            # Check for photos
+            # Check for photos — 3 patterns in priority order:
+            # 1. background-image: url(...) — single-photo posts
+            # 2. data-media-url="..." — used by some t.me/s/ versions
+            # 3. <img src="..."> inside photo wrap div — album posts
             photo_match = re.search(
                 r'background-image:\s*url\([\'"]?(https://[^\'"\)]+)[\'"]?\)',
                 block
@@ -241,6 +244,26 @@ class ChannelMonitor:
             if photo_match:
                 media_type = "photo"
                 media_url = photo_match.group(1)
+
+            if media_url is None:
+                data_media_match = re.search(
+                    r'data-media-url=[\'"]?(https://[^\'"\s>]+)',
+                    block
+                )
+                if data_media_match:
+                    media_type = "photo"
+                    media_url = data_media_match.group(1)
+
+            if media_url is None:
+                # Album posts render photos as <img> inside photo-wrap divs
+                img_match = re.search(
+                    r'<img[^>]+src=[\'"]?(https://cdn(?:\d+)?\.telegram\.org/[^\'"\s>]+)',
+                    block,
+                    re.IGNORECASE,
+                )
+                if img_match:
+                    media_type = "photo"
+                    media_url = img_match.group(1)
 
             # Check for videos
             if '<video' in block or 'tgme_widget_message_video' in block:
