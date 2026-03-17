@@ -36,12 +36,14 @@ DEFAULT_SCHEDULE = [
     (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
-    (13, 0,  "recipe",        "🍽 Рецепт"),
+    (13, 0,  "animal_clip",   "🐶 Животные (VK Клип)"),
+    (13, 30, "recipe",        "🍽 Рецепт"),
     (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
     (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
     (19, 0,  "evening_fun",   "😄 Вечерний"),
+    (20, 0,  "animal_clip",   "🐱 Животные вечер (VK Клип)"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
     (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
 ]
@@ -198,6 +200,94 @@ class ContentScheduler:
         text, photo_url = None, None
         weather_data = None
         
+        if rubric == "animal_clip":
+            try:
+                import src.bot as bot_module
+                vk = getattr(bot_module, '_vk_publisher', None)
+                if not (vk and vk.enabled):
+                    logger.info("animal_clip skipped: VK not configured")
+                    return False
+
+                # Animal search pools — random mix each call for variety
+                import random
+                animal_pools = [
+                    ["funny cat", "cute kitten playing"],
+                    ["funny dog", "puppy playing"],
+                    ["funny animals", "cute pets"],
+                    ["baby animals", "cute animal"],
+                    ["funny bunny rabbit", "hamster cute"],
+                    ["dogs playing", "cats funny"],
+                ]
+                keywords = random.choice(animal_pools)
+
+                import os
+                from src.media_processor import MediaProcessor
+                mp = MediaProcessor(
+                    pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                    media_dir=self.config.media_dir,
+                )
+
+                logger.info(f"animal_clip: searching Pexels videos for {keywords}")
+                v_url = await mp.search_pexels_video(
+                    keywords, min_duration=5, max_duration=30
+                )
+
+                if not v_url:
+                    logger.warning("animal_clip: no video found on Pexels, skipping")
+                    return False
+
+                # Download video to temp file
+                import aiohttp as _aiohttp
+                import tempfile
+                tmp_path = os.path.join(
+                    self.config.media_dir, f"animal_clip_{int(__import__('time').time())}.mp4"
+                )
+                async with _aiohttp.ClientSession() as sess:
+                    async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=60)) as resp:
+                        if resp.status != 200:
+                            logger.error(f"animal_clip: video download failed HTTP {resp.status}")
+                            return False
+                        with open(tmp_path, "wb") as f:
+                            f.write(await resp.read())
+
+                file_mb = os.path.getsize(tmp_path) / 1024 / 1024
+                logger.info(f"animal_clip: downloaded {file_mb:.1f} MB → {tmp_path}")
+
+                # Captions pool
+                captions = [
+                    "🐾 Позитивный момент дня",
+                    "🐱 Котики заряжают!",
+                    "🐶 Хорошего настроения, Ижевск!",
+                    "🐾 Пятничная доза позитива",
+                    "😄 Смотришь и улыбаешься",
+                    "🐱 Они просто наслаждаются жизнью",
+                    "🐶 Лучший контент в интернете",
+                ]
+                caption = random.choice(captions) + "\n\n📱 @IzhevskTodayNews"
+
+                clip_id = await vk.upload_clip(
+                    tmp_path,
+                    caption=caption,
+                    link_url="https://vk.com/izhevsk_segodnya",
+                )
+
+                # Cleanup temp file
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+                if clip_id:
+                    logger.info(f"✅ VK Animal Clip published (video_id={clip_id})")
+                    return True
+                else:
+                    logger.warning("animal_clip: upload_clip returned None")
+                    return False
+
+            except Exception as e:
+                logger.error(f"animal_clip failed: {e}", exc_info=True)
+            return False
+
         if rubric == "cat_story":
             try:
                 import src.bot as bot_module

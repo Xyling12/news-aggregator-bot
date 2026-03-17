@@ -425,6 +425,110 @@ class VKPublisher:
         logger.error(f"VK Video Story save failed: {save_result}")
         return False
 
+    async def upload_clip(
+        self,
+        video_path: str,
+        caption: str = "",
+        link_url: str = "",
+    ) -> Optional[int]:
+        """
+        Upload a short video as a VK Clip (Shorts/Reels format).
+
+        VK Clips use video.save + dedicated video upload server.
+        Requires group access_token with video scope.
+        Returns VK video ID on success, None on failure.
+
+        Args:
+            video_path: Path to local .mp4 file (vertical 9:16, max 60s recommended)
+            caption:    Clip description/caption text (shown below clip)
+            link_url:   Optional URL link to add to the clip
+        """
+        if not os.path.exists(video_path):
+            logger.error(f"Clip video file not found: {video_path}")
+            return None
+
+        file_size = os.path.getsize(video_path)
+        if file_size > 256 * 1024 * 1024:  # 256 MB VK limit
+            logger.error(f"Clip video too large: {file_size / 1024 / 1024:.1f} MB (max 256 MB)")
+            return None
+
+        # Step 1: Save video object — get upload server URL
+        save_params: dict = {
+            "group_id": int(self.group_id),
+            "name": caption[:128] if caption else "Клип",
+            "description": caption[:4096] if caption else "",
+            "is_private": 0,
+            "wallpost": 0,        # We'll post to wall manually if needed
+            "repeat": 0,
+        }
+        if link_url:
+            save_params["link"] = link_url
+
+        save_result = await self._api_call("video.save", **save_params)
+        if not save_result or not save_result.get("upload_url"):
+            logger.error(f"VK Clip: failed to get upload server. Response: {save_result}")
+            return None
+
+        upload_url = save_result["upload_url"]
+        video_id   = save_result.get("video_id")
+        owner_id   = save_result.get("owner_id")
+
+        # Step 2: Upload the video file
+        try:
+            with open(video_path, "rb") as f:
+                video_bytes = f.read()
+
+            form = aiohttp.FormData()
+            form.add_field(
+                "video_file",
+                video_bytes,
+                filename="clip.mp4",
+                content_type="video/mp4",
+            )
+
+            session = await self._get_session()
+            async with session.post(
+                upload_url,
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=120),  # large files need more time
+            ) as resp:
+                upload_result = await resp.json()
+
+            logger.debug(f"VK Clip upload response: {upload_result}")
+
+        except asyncio.TimeoutError:
+            logger.error("VK Clip upload timeout — server took >120s")
+            return None
+        except Exception as e:
+            logger.error(f"VK Clip upload error: {type(e).__name__}: {e}")
+            return None
+
+        # Step 3: Post the clip to the community wall so it appears in Клипы feed
+        if video_id and owner_id:
+            attachment = f"video{owner_id}_{video_id}"
+            wall_params = {
+                "owner_id": -int(self.group_id),
+                "from_group": 1,
+                "message": caption[:4096] if caption else "",
+                "attachments": attachment,
+            }
+            wall_result = await self._api_call("wall.post", **wall_params)
+            if wall_result and "post_id" in wall_result:
+                logger.info(
+                    f"✅ VK Clip published: vk.com/wall-{self.group_id}_{wall_result['post_id']} "
+                    f"(video {attachment})"
+                )
+                return video_id
+            else:
+                logger.warning(f"VK Clip uploaded but wall.post failed: {wall_result}")
+                # Video is still uploaded — return its ID
+                return video_id
+
+        logger.error("VK Clip: video_id missing from save response")
+        return None
+
+
+
     async def test_connection(self) -> dict:
         """Test VK API connection and return group info."""
         result = {
