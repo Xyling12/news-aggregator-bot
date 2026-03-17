@@ -271,13 +271,20 @@ class ContentScheduler:
                     self.config.media_dir,
                     f"animal_clip_{int(time.time())}.mp4"
                 )
-                async with _aiohttp.ClientSession() as sess:
+                # Pexels CDN requires API key in Authorization header
+                dl_headers = {
+                    "Authorization": os.getenv("PEXELS_API_KEY", ""),
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                    "Referer": "https://www.pexels.com/",
+                }
+                async with _aiohttp.ClientSession(headers=dl_headers) as sess:
                     async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
                         if resp.status != 200:
-                            logger.error(f"animal_clip: video download failed HTTP {resp.status}")
+                            logger.error(f"animal_clip: video download failed HTTP {resp.status} url={v_url[:80]}")
                             return False
                         with open(tmp_path, "wb") as f:
                             f.write(await resp.read())
+
 
                 file_mb = os.path.getsize(tmp_path) / 1024 / 1024
                 logger.info(f"animal_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
