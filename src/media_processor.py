@@ -433,18 +433,29 @@ class MediaProcessor:
 
         return results
 
-    async def search_pexels_video(self, keywords: List[str], min_duration: int = 5, max_duration: int = 20) -> Optional[str]:
-        """Search Pexels for short vertical/square portrait videos. Requires PEXELS_API_KEY.
-        
-        Returns the direct URL to the MP4 file, or None if not found/no key.
+    async def search_pexels_video(
+        self,
+        keywords: List[str],
+        min_duration: int = 5,
+        max_duration: int = 30,
+        min_quality_px: int = 1080,   # min pixels on longer side (HD threshold)
+        exclude_ids: Optional[List[int]] = None,   # already-used Pexels video IDs
+    ) -> Optional[tuple]:
+        """Search Pexels for short portrait videos. Requires PEXELS_API_KEY.
+
+        Quality filtering:
+          - Only returns files where the longer dimension >= min_quality_px (default 1080)
+          - Sorts candidates by pixel count (width × height) — highest quality first
+          - Skips quality tags: 'sd', '360', '240' in file quality field
+
+        Returns (video_id, mp4_url) tuple, or None if nothing found.
         """
         if not self.pexels_key:
             logger.debug("Pexels Video: no API key configured, skipping")
             return None
 
-        query = " ".join(keywords[:3])
-        if not query:
-            query = "nature"
+        query = " ".join(keywords[:3]) or "animals"
+        exclude_ids = set(exclude_ids or [])
 
         try:
             headers = {
@@ -457,11 +468,11 @@ class MediaProcessor:
                 session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
             else:
                 session_ctx = aiohttp.ClientSession(headers=headers)
-                
+
             async with session_ctx as session:
                 params = {
                     "query": query,
-                    "per_page": 10,
+                    "per_page": 15,          # more candidates → better quality selection
                     "orientation": "portrait",
                 }
                 async with session.get(
@@ -469,34 +480,69 @@ class MediaProcessor:
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        videos = data.get("videos", [])
-                        
-                        import random
-                        random.shuffle(videos)
-                        
-                        for vid in videos:
-                            duration = vid.get("duration", 0)
-                            if min_duration <= duration <= max_duration:
-                                files = vid.get("video_files", [])
-                                # Get HD vertical file if possible
-                                if files:
-                                    # Sort by quality
-                                    files.sort(key=lambda f: f.get("width", 0), reverse=True)
-                                    return files[0].get("link")
-                                    
-                        # If no strict duration match, take the first one
-                        if videos and videos[0].get("video_files"):
-                            return videos[0]["video_files"][0].get("link")
-                            
-                    else:
+                    if resp.status != 200:
                         logger.error(f"Pexels Video API {resp.status}")
-                        
+                        return None
+                    data = await resp.json()
+
+            videos = data.get("videos", [])
+            import random
+            random.shuffle(videos)
+
+            def _best_hd_file(files: list) -> Optional[str]:
+                """Return URL of the best HD file, or None if nothing meets threshold."""
+                # Filter: min resolution on longer side, skip obvious low-quality tags
+                _bad_quality = {"sd", "360p", "240p"}
+                hd_files = [
+                    f for f in files
+                    if max(f.get("width", 0), f.get("height", 0)) >= min_quality_px
+                    and f.get("quality", "").lower() not in _bad_quality
+                ]
+                if not hd_files:
+                    return None
+                # Sort by pixel count descending → pick highest resolution
+                hd_files.sort(
+                    key=lambda f: f.get("width", 0) * f.get("height", 0),
+                    reverse=True,
+                )
+                return hd_files[0].get("link")
+
+            # Pass 1: duration filter + HD + not already used
+            for vid in videos:
+                vid_id = vid.get("id")
+                if vid_id in exclude_ids:
+                    continue
+                duration = vid.get("duration", 0)
+                if min_duration <= duration <= max_duration:
+                    url = _best_hd_file(vid.get("video_files", []))
+                    if url:
+                        logger.info(
+                            f"Pexels Video: selected id={vid_id} "
+                            f"duration={duration}s quality=HD query='{query}'"
+                        )
+                        return (vid_id, url)
+
+            # Pass 2: relax duration, still require HD
+            for vid in videos:
+                vid_id = vid.get("id")
+                if vid_id in exclude_ids:
+                    continue
+                url = _best_hd_file(vid.get("video_files", []))
+                if url:
+                    logger.info(
+                        f"Pexels Video: relaxed-duration id={vid_id} query='{query}'"
+                    )
+                    return (vid_id, url)
+
+            logger.warning(f"Pexels Video: no HD results for '{query}'")
+
+        except asyncio.TimeoutError:
+            logger.error("Pexels Video API timeout (>15s)")
         except Exception as e:
             logger.error(f"Pexels Video search failed: {e}")
 
         return None
+
 
     async def download_stock_photo(self, photo_url: str, filename: str) -> Optional[str]:
         """Download a stock photo and save it locally.

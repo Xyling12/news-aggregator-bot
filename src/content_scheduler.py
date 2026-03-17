@@ -31,19 +31,21 @@ TZ_IZHEVSK = timezone(timedelta(hours=4))
 # ── Schedule: (hour, minute) -> rubric method name ───────────────────────
 DEFAULT_SCHEDULE = [
     (7,  0,  "weather",       "🌤 Погода"),
-    (8,  0,  "holiday",       "🎉 Праздник"),  # Only publishes if today is a holiday
-    (9,  0,  "history_fact",  "📅 История"),
+    (8,  0,  "holiday",       "🎉 Праздник"),
+    (9,  0,  "animal_clip",   "🐶 Животные утро (VK Клип)"),
+    (9,  30, "history_fact",  "📅 История"),
     (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
-    (13, 0,  "animal_clip",   "🐶 Животные (VK Клип)"),
+    (13, 0,  "animal_clip",   "🐱 Животные обед (VK Клип)"),
     (13, 30, "recipe",        "🍽 Рецепт"),
     (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
     (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
+    (18, 0,  "animal_clip",   "🐾 Животные вечер (VK Клип)"),
     (19, 0,  "evening_fun",   "😄 Вечерний"),
-    (20, 0,  "animal_clip",   "🐱 Животные вечер (VK Клип)"),
+    (20, 0,  "animal_clip",   "🐱 Животные ночь (VK Клип)"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
     (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
 ]
@@ -208,8 +210,21 @@ class ContentScheduler:
                     logger.info("animal_clip skipped: VK not configured")
                     return False
 
-                # Animal search pools — random mix each call for variety
-                import random
+                import os, json, random, time
+                from src.media_processor import MediaProcessor
+                import aiohttp as _aiohttp
+
+                # ── Load history of used Pexels video IDs ──────────────────
+                history_path = os.path.join(self.config.media_dir, "..", "data", "clip_history.json")
+                history_path = os.path.normpath(history_path)
+                os.makedirs(os.path.dirname(history_path), exist_ok=True)
+                try:
+                    with open(history_path, "r") as hf:
+                        used_ids: list = json.load(hf)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    used_ids = []
+
+                # ── Pick random animal category ──────────────────────────────
                 animal_pools = [
                     ["funny cat", "cute kitten playing"],
                     ["funny dog", "puppy playing"],
@@ -217,33 +232,47 @@ class ContentScheduler:
                     ["baby animals", "cute animal"],
                     ["funny bunny rabbit", "hamster cute"],
                     ["dogs playing", "cats funny"],
+                    ["cute kitten", "cat video"],
+                    ["adorable puppy", "dog funny"],
                 ]
                 keywords = random.choice(animal_pools)
 
-                import os
-                from src.media_processor import MediaProcessor
                 mp = MediaProcessor(
                     pexels_key=os.getenv("PEXELS_API_KEY", ""),
                     media_dir=self.config.media_dir,
                 )
 
-                logger.info(f"animal_clip: searching Pexels videos for {keywords}")
-                v_url = await mp.search_pexels_video(
-                    keywords, min_duration=5, max_duration=30
+                logger.info(f"animal_clip: searching Pexels HD videos for {keywords} (excluding {len(used_ids)} used)")
+                result = await mp.search_pexels_video(
+                    keywords,
+                    min_duration=5,
+                    max_duration=40,
+                    exclude_ids=used_ids,
                 )
 
-                if not v_url:
-                    logger.warning("animal_clip: no video found on Pexels, skipping")
+                if not result:
+                    # Try generic fallback if specific query failed
+                    logger.info("animal_clip: retry with generic 'cute animals'")
+                    result = await mp.search_pexels_video(
+                        ["cute animals"],
+                        min_duration=5,
+                        max_duration=40,
+                        exclude_ids=used_ids,
+                    )
+
+                if not result:
+                    logger.warning("animal_clip: no HD video found, skipping")
                     return False
 
-                # Download video to temp file
-                import aiohttp as _aiohttp
-                import tempfile
+                pexels_vid_id, v_url = result
+
+                # ── Download video ───────────────────────────────────────────
                 tmp_path = os.path.join(
-                    self.config.media_dir, f"animal_clip_{int(__import__('time').time())}.mp4"
+                    self.config.media_dir,
+                    f"animal_clip_{int(time.time())}.mp4"
                 )
                 async with _aiohttp.ClientSession() as sess:
-                    async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=60)) as resp:
+                    async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
                         if resp.status != 200:
                             logger.error(f"animal_clip: video download failed HTTP {resp.status}")
                             return False
@@ -251,17 +280,19 @@ class ContentScheduler:
                             f.write(await resp.read())
 
                 file_mb = os.path.getsize(tmp_path) / 1024 / 1024
-                logger.info(f"animal_clip: downloaded {file_mb:.1f} MB → {tmp_path}")
+                logger.info(f"animal_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
 
-                # Captions pool
+                # ── Upload to VK as Clip ─────────────────────────────────────
                 captions = [
                     "🐾 Позитивный момент дня",
                     "🐱 Котики заряжают!",
                     "🐶 Хорошего настроения, Ижевск!",
-                    "🐾 Пятничная доза позитива",
+                    "🐾 Доза позитива",
                     "😄 Смотришь и улыбаешься",
                     "🐱 Они просто наслаждаются жизнью",
                     "🐶 Лучший контент в интернете",
+                    "🐾 Просто посмотри",
+                    "😻 Ну как тут не улыбнуться?",
                 ]
                 caption = random.choice(captions) + "\n\n📱 @IzhevskTodayNews"
 
@@ -271,14 +302,24 @@ class ContentScheduler:
                     link_url="https://vk.com/izhevsk_segodnya",
                 )
 
-                # Cleanup temp file
+                # ── Cleanup ──────────────────────────────────────────────────
                 try:
                     os.remove(tmp_path)
                 except Exception:
                     pass
 
                 if clip_id:
-                    logger.info(f"✅ VK Animal Clip published (video_id={clip_id})")
+                    # Save used ID to history (keep last 500)
+                    used_ids.append(pexels_vid_id)
+                    if len(used_ids) > 500:
+                        used_ids = used_ids[-500:]
+                    try:
+                        with open(history_path, "w") as hf:
+                            json.dump(used_ids, hf)
+                    except Exception as he:
+                        logger.warning(f"animal_clip: failed to save history: {he}")
+
+                    logger.info(f"✅ VK Animal Clip published (video_id={clip_id}, pexels_id={pexels_vid_id})")
                     return True
                 else:
                     logger.warning("animal_clip: upload_clip returned None")
@@ -287,6 +328,7 @@ class ContentScheduler:
             except Exception as e:
                 logger.error(f"animal_clip failed: {e}", exc_info=True)
             return False
+
 
         if rubric == "cat_story":
             try:
