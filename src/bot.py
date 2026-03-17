@@ -44,6 +44,7 @@ from src.utils import (
     RUBRIC_MAP,
     BREAKING_KEYWORDS,
 )
+from src.content_filter import filter_sensitive_content, FilterAction
 
 logger = logging.getLogger(__name__)
 
@@ -1052,6 +1053,23 @@ async def cb_rewrite(callback: CallbackQuery):
         rewritten, engine = await _rewriter.rewrite(clean_original)
         if rewritten:
             rewritten = _clean_text(rewritten)  # Clean AI output
+
+            # ── Фильтр чувствительного контента ──────────────────────────
+            _cf_result = filter_sensitive_content(rewritten)
+            if _cf_result.action == FilterAction.BLOCK:
+                await _db.update_post_status(post_id, "rejected")
+                logger.warning(
+                    f"Post #{post_id} BLOCKED by content_filter (manual rewrite): {_cf_result.reason}"
+                )
+                await callback.message.reply(
+                    f"🚫 Пост заблокирован фильтром чувствительного контента.\n"
+                    f"<code>{_cf_result.reason}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            rewritten = _cf_result.text  # Возможно заменены эвфемизмы / добавлен дисклеймер
+            # ─────────────────────────────────────────────────────────────
+
             # Generate hashtags and format
             hashtags = await _rewriter.generate_hashtags(rewritten)
             rewritten = _format_post(rewritten, hashtags)
@@ -1565,6 +1583,17 @@ async def process_new_post(post_id: int):
             await _db.update_post_status(post_id, "rejected")
             logger.warning(f"Post #{post_id} rejected: AI refusal detected in rewritten text")
             return
+
+        # ── Фильтр чувствительного контента ──────────────────────────────
+        _cf_result = filter_sensitive_content(rewritten)
+        if _cf_result.action == FilterAction.BLOCK:
+            await _db.update_post_status(post_id, "rejected")
+            logger.warning(
+                f"Post #{post_id} BLOCKED by content_filter (pipeline): {_cf_result.reason}"
+            )
+            return
+        rewritten = _cf_result.text  # Возможно заменены эвфемизмы / добавлен дисклеймер
+        # ─────────────────────────────────────────────────────────────────
 
         uniqueness = _rewriter.calculate_uniqueness(original_text, rewritten)
         logger.info(f"Post #{post_id} rewritten by {engine} (uniqueness: {uniqueness:.0%})")
