@@ -700,7 +700,27 @@ class ContentGenerator:
         if text:
             text += "\n\n─ ─ ─ ─ ─\n#история #удмуртия #ижевск"
             text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
-        return await self._generate_with_photo(text, hint_keywords=["old photograph sepia", "historical archive document"])
+
+        # Build dynamic photo keywords from the post content so each historical
+        # event gets a *different* photo (not always the same sepia archive shot).
+        # AI extracts topic-specific English words; fallback to broad history terms.
+        history_keywords = None
+        if text:
+            try:
+                kw_prompt = PHOTO_KEYWORDS_PROMPT.format(text=text[:400])
+                kw_text = await self._ask_ai(kw_prompt, temperature=0.2)
+                if kw_text:
+                    kw_text = re.sub(r'<[^>]+>', '', kw_text)
+                    history_keywords = [kw.strip().lower() for kw in kw_text.split(",") if kw.strip()][:5]
+                    logger.info(f"history_fact photo keywords (AI): {history_keywords}")
+            except Exception as e:
+                logger.warning(f"history_fact: AI keyword generation failed: {e}")
+
+        if not history_keywords:
+            # Generic fallback — avoid using blank 'sepia' for every post
+            history_keywords = ["historical event", "soviet era", "russia history", "archive", "city past"]
+
+        return await self._generate_with_photo(text, hint_keywords=history_keywords)
 
     async def generate_five_facts(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate '5 facts about...' post."""

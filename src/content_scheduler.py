@@ -72,6 +72,7 @@ class ContentScheduler:
         self._published_today: set[str] = set()  # Track what was published today
         self._last_date: Optional[str] = None
         self._failed_slots: dict[str, int] = {}  # slot_key -> retry count
+        self._used_photo_urls: set[str] = set()  # Track photo URLs used today (dedup)
 
     def _now(self) -> datetime:
         """Get current time in Izhevsk timezone."""
@@ -120,6 +121,7 @@ class ContentScheduler:
                 if self._last_date != today_str:
                     self._published_today.clear()
                     self._failed_slots.clear()
+                    self._used_photo_urls.clear()  # reset photo dedup each day
                     self._last_date = today_str
                     logger.info(f"New day: {today_str}, schedule reset")
 
@@ -469,6 +471,30 @@ class ContentScheduler:
         if not text:
             logger.warning(f"Content generation returned empty for {rubric} — Gemini may be rate-limited")
             raise RuntimeError(f"AI вернул пустой текст для '{label}'. Возможно, квота Gemini исчерпана — попробуй позже.")
+
+        # ── Photo deduplication: if the same URL was already used today, try to
+        # pick a different photo so consecutive posts look visually distinct.
+        if photo_url and photo_url in self._used_photo_urls:
+            logger.warning(
+                f"{rubric}: photo URL already used today — searching for alternative"
+            )
+            try:
+                alt_photos = await self.generator._media.search_stock_photo(
+                    ["city", "russia", "nature", "architecture"], count=5
+                )
+                for candidate in alt_photos:
+                    alt_url = candidate.get("url", "")
+                    if alt_url and alt_url not in self._used_photo_urls:
+                        photo_url = alt_url
+                        logger.info(f"{rubric}: alternative photo found: {alt_url[:60]}")
+                        break
+                else:
+                    logger.warning(f"{rubric}: no unique alternative photo found, reusing existing")
+            except Exception as dedup_err:
+                logger.warning(f"{rubric}: photo dedup search failed: {dedup_err}")
+
+        if photo_url:
+            self._used_photo_urls.add(photo_url)
 
         # Guard: reject AI refusals before publishing ("Я не могу обсудить эту тему...")
         try:
