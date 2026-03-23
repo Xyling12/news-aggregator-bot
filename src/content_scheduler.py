@@ -38,6 +38,7 @@ DEFAULT_SCHEDULE = [
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
     (13, 0,  "animal_clip",   "🐱 Животные обед (VK Клип)"),
+    (13, 30, "recipe",        "🍽 Рецепт"),
     (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
     (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
@@ -503,6 +504,8 @@ class ContentScheduler:
             text, photo_url = await self.generator.generate_history_fact()
         elif rubric == "five_facts":
             text, photo_url = await self.generator.generate_five_facts()
+        elif rubric == "recipe":
+            text, photo_url = await self.generator.generate_recipe()
         elif rubric == "lifehack":
             text, photo_url = await self.generator.generate_lifehack()
         elif rubric == "place":
