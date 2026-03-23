@@ -664,24 +664,26 @@ class ContentGenerator:
             text += "\n\n─ ─ ─ ─ ─\n#погода #ижевск"
             text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
 
-        # Pick photo keywords based on actual weather condition — no city lock
+        # Pick photo keywords based on actual weather condition.
+        # IMPORTANT: avoid 'city' terms — they return random European cityscapes.
+        # Use pure weather phenomena so the photo looks like a weather illustration.
         desc_lower = description.lower()
         if any(w in desc_lower for w in ["снег", "снегопад", "метель", "крупа", "снежн"]):
-            weather_keywords = ["snowfall winter", "snow storm", "snowy day"]
+            weather_keywords = ["snowfall winter forest", "snow covered trees", "winter snow nature"]
         elif any(w in desc_lower for w in ["мороз", "заморозк"]) or temp <= -15:
-            weather_keywords = ["frost cold winter", "frozen nature", "ice winter"]
+            weather_keywords = ["frost frozen nature", "ice crystals cold", "winter frost trees"]
         elif any(w in desc_lower for w in ["гроза", "град", "ливень"]):
-            weather_keywords = ["thunderstorm lightning", "heavy rain storm", "dramatic storm sky"]
+            weather_keywords = ["thunderstorm lightning", "heavy rain storm sky", "dramatic storm clouds"]
         elif any(w in desc_lower for w in ["дождь", "морось", "осадк"]):
-            weather_keywords = ["rain drops", "rainy day city", "cloudy rain"]
+            weather_keywords = ["rain drops puddle", "rainy weather umbrella", "autumn rain"]
         elif any(w in desc_lower for w in ["туман", "изморозь"]):
-            weather_keywords = ["morning fog", "misty foggy landscape"]
-        elif any(w in desc_lower for w in ["ясно", "солнечн", "ясно"]) and temp > 10:
-            weather_keywords = ["sunny day", "clear blue sky", "sunny spring"]
+            weather_keywords = ["morning fog forest", "misty foggy nature", "dawn mist"]
+        elif any(w in desc_lower for w in ["ясно", "солнечн"]) and temp > 10:
+            weather_keywords = ["sunny day blue sky", "clear sky sunshine", "spring sunny nature"]
         elif any(w in desc_lower for w in ["облачн", "пасмурн"]):
-            weather_keywords = ["cloudy sky", "overcast weather", "grey clouds"]
+            weather_keywords = ["cloudy sky overcast", "grey clouds nature", "cloudy day"]
         else:
-            weather_keywords = ["winter city morning", "cold weather season"]
+            weather_keywords = ["winter nature cold", "cold weather season", "frost morning"]
 
         text, photo_url = await self._generate_with_photo(text, hint_keywords=weather_keywords)
         weather_data = {
@@ -885,7 +887,8 @@ class ContentGenerator:
             text += "\n\n─ ─ ─ ─ ─\n#итогидня #ижевск"
             text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         return await self._generate_with_photo(
-            text, hint_keywords=["evening cityscape", "city lights skyline"]
+            text,
+            hint_keywords=["Russia city evening", "Russian street winter", "Udmurtia Russia"],
         )
 
     async def generate_holiday(self) -> Tuple[Optional[str], Optional[str]]:

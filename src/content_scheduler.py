@@ -38,7 +38,6 @@ DEFAULT_SCHEDULE = [
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
     (13, 0,  "animal_clip",   "🐱 Животные обед (VK Клип)"),
-    (13, 30, "recipe",        "🍽 Рецепт"),
     (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
     (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
@@ -49,6 +48,10 @@ DEFAULT_SCHEDULE = [
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
     (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
 ]
+
+
+# How many days to remember a photo URL to avoid repeats
+_PHOTO_DEDUP_DAYS = 30
 
 
 class ContentScheduler:
@@ -72,11 +75,54 @@ class ContentScheduler:
         self._published_today: set[str] = set()  # Track what was published today
         self._last_date: Optional[str] = None
         self._failed_slots: dict[str, int] = {}  # slot_key -> retry count
-        self._used_photo_urls: set[str] = set()  # Track photo URLs used today (dedup)
+        self._used_photo_urls: set[str] = self._load_photo_history()  # Persistent dedup
 
     def _now(self) -> datetime:
         """Get current time in Izhevsk timezone."""
         return datetime.now(TZ_IZHEVSK)
+
+    # ── Persistent photo deduplication ────────────────────────────────────────
+
+    def _photo_history_path(self) -> str:
+        import os
+        return os.path.join(self.config.media_dir, "..", "data", "photo_url_history.json")
+
+    def _load_photo_history(self) -> set:
+        """Load used photo URLs from disk; prune entries older than _PHOTO_DEDUP_DAYS."""
+        import json, os
+        path = os.path.normpath(self._photo_history_path())
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)  # {url: iso_date_str}
+            cutoff = (datetime.now() - timedelta(days=_PHOTO_DEDUP_DAYS)).date().isoformat()
+            fresh = {url for url, date in data.items() if date >= cutoff}
+            logger.info(f"Photo history loaded: {len(fresh)} URLs in last {_PHOTO_DEDUP_DAYS} days")
+            return fresh
+        except (FileNotFoundError, json.JSONDecodeError):
+            return set()
+
+    def _save_photo_history(self, new_urls: set) -> None:
+        """Persist new photo URLs with today's date to disk."""
+        import json, os
+        path = os.path.normpath(self._photo_history_path())
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        today = datetime.now().date().isoformat()
+        # Load existing file to preserve old entries
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        for url in new_urls:
+            data[url] = today
+        # Prune entries older than _PHOTO_DEDUP_DAYS
+        cutoff = (datetime.now() - timedelta(days=_PHOTO_DEDUP_DAYS)).date().isoformat()
+        data = {url: date for url, date in data.items() if date >= cutoff}
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.warning(f"Failed to save photo history: {e}")
 
     async def start(self):
         """Start the content scheduler loop."""
@@ -121,7 +167,8 @@ class ContentScheduler:
                 if self._last_date != today_str:
                     self._published_today.clear()
                     self._failed_slots.clear()
-                    self._used_photo_urls.clear()  # reset photo dedup each day
+                    # Reload photo history from disk (do NOT clear — dedup is persistent)
+                    self._used_photo_urls = self._load_photo_history()
                     self._last_date = today_str
                     logger.info(f"New day: {today_str}, schedule reset")
 
@@ -456,8 +503,6 @@ class ContentScheduler:
             text, photo_url = await self.generator.generate_history_fact()
         elif rubric == "five_facts":
             text, photo_url = await self.generator.generate_five_facts()
-        elif rubric == "recipe":
-            text, photo_url = await self.generator.generate_recipe()
         elif rubric == "lifehack":
             text, photo_url = await self.generator.generate_lifehack()
         elif rubric == "place":
@@ -495,6 +540,7 @@ class ContentScheduler:
 
         if photo_url:
             self._used_photo_urls.add(photo_url)
+            self._save_photo_history({photo_url})
 
         # Guard: reject AI refusals before publishing ("Я не могу обсудить эту тему...")
         try:
