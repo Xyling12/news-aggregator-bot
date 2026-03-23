@@ -699,12 +699,19 @@ class ContentScheduler:
                             if not hasattr(self, 'story_generator'):
                                 from src.story_generator import StoryGenerator
                                 self.story_generator = StoryGenerator()
-                            # Extract short headline (first sentence, max 120 chars)
+                            # Extract headline from the FIRST LINE of the post.
+                            # Sentence-based extraction picks up "1." from numbered lists
+                            # (e.g. "5 фактов ... которые вы не знали  1."), so we
+                            # split by newlines and take the first non-empty line instead.
                             import re as _re2
                             clean_txt = _re2.sub(r'<[^>]+>', '', text)  # strip HTML
                             clean_txt = _re2.sub(r'#\S+', '', clean_txt).strip()
-                            sentences = _re2.split(r'(?<=[.!?]) +', clean_txt[:300])
-                            headline = sentences[0] if sentences else clean_txt[:120]
+                            # Remove leading emoji-chars that might appear alone on a line
+                            clean_txt = _re2.sub(r'^[\U0001F300-\U0001FAFF\s]+\n', '', clean_txt, flags=_re2.MULTILINE)
+                            lines = [l.strip() for l in clean_txt.splitlines() if l.strip()]
+                            headline = lines[0] if lines else clean_txt[:120]
+                            # Strip numbered-list start if it leaked into headline (e.g. "Title  1.")
+                            headline = _re2.sub(r'\s+\d+\.\s*$', '', headline).strip()
                             if len(headline) > 120:
                                 headline = headline[:117] + "..."
                             
