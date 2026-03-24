@@ -318,24 +318,41 @@ class ContentScheduler:
 
                 pexels_vid_id, v_url = result
 
-                # ── Download video ───────────────────────────────────────────
+                # ── Download video with retry on 403 ─────────────────────────
                 tmp_path = os.path.join(
                     self.config.media_dir,
                     f"animal_clip_{int(time.time())}.mp4"
                 )
-                # Pexels CDN requires API key in Authorization header
                 dl_headers = {
                     "Authorization": os.getenv("PEXELS_API_KEY", ""),
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                     "Referer": "https://www.pexels.com/",
+                    "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
                 }
-                async with _aiohttp.ClientSession(headers=dl_headers) as sess:
-                    async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
-                        if resp.status != 200:
-                            logger.error(f"animal_clip: video download failed HTTP {resp.status} url={v_url[:80]}")
-                            return False
-                        with open(tmp_path, "wb") as f:
-                            f.write(await resp.read())
+                download_ok = False
+                for _dl_try in range(3):
+                    async with _aiohttp.ClientSession(headers=dl_headers) as sess:
+                        async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
+                            if resp.status == 200:
+                                with open(tmp_path, "wb") as f:
+                                    f.write(await resp.read())
+                                download_ok = True
+                                break
+                            elif resp.status in (403, 404):
+                                logger.warning(f"animal_clip: video {resp.status} id={pexels_vid_id}, trying next video")
+                                used_ids.append(pexels_vid_id)
+                                retry_result = await mp.search_pexels_video(
+                                    keywords, min_duration=5, max_duration=40, exclude_ids=used_ids
+                                )
+                                if not retry_result:
+                                    break
+                                pexels_vid_id, v_url = retry_result
+                            else:
+                                logger.error(f"animal_clip: download failed HTTP {resp.status}")
+                                break
+                if not download_ok:
+                    logger.error("animal_clip: all download attempts failed, skipping")
+                    return False
 
 
                 file_mb = os.path.getsize(tmp_path) / 1024 / 1024
@@ -447,23 +464,41 @@ class ContentScheduler:
 
                 pexels_vid_id, v_url = result
 
-                # ── Скачиваем видео ───────────────────────────────────────────
+                # ── Скачиваем видео с retry на 403 ───────────────────────────
                 tmp_path = os.path.join(
                     self.config.media_dir,
                     f"cat_clip_{int(time.time())}.mp4"
                 )
                 dl_headers = {
                     "Authorization": os.getenv("PEXELS_API_KEY", ""),
-                    "User-Agent": "Mozilla/5.0",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                     "Referer": "https://www.pexels.com/",
+                    "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
                 }
-                async with _aiohttp.ClientSession(headers=dl_headers) as sess:
-                    async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
-                        if resp.status != 200:
-                            logger.error(f"cat_clip: download failed HTTP {resp.status}")
-                            return False
-                        with open(tmp_path, "wb") as f:
-                            f.write(await resp.read())
+                download_ok = False
+                for _dl_try in range(3):
+                    async with _aiohttp.ClientSession(headers=dl_headers) as sess:
+                        async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
+                            if resp.status == 200:
+                                with open(tmp_path, "wb") as f:
+                                    f.write(await resp.read())
+                                download_ok = True
+                                break
+                            elif resp.status in (403, 404):
+                                logger.warning(f"cat_clip: video {resp.status} id={pexels_vid_id}, trying next video")
+                                used_ids.append(pexels_vid_id)
+                                retry_result = await mp.search_pexels_video(
+                                    keywords, min_duration=5, max_duration=45, exclude_ids=used_ids
+                                )
+                                if not retry_result:
+                                    break
+                                pexels_vid_id, v_url = retry_result
+                            else:
+                                logger.error(f"cat_clip: download failed HTTP {resp.status}")
+                                break
+                if not download_ok:
+                    logger.error("cat_clip: all download attempts failed, skipping")
+                    return False
 
                 file_mb = os.path.getsize(tmp_path) / 1024 / 1024
                 logger.info(f"cat_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
