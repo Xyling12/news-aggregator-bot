@@ -120,3 +120,14 @@ news-aggregator-bot/
 ---
 
 📲 **Канал**: [@IzhevskTodayNews](https://t.me/IzhevskTodayNews)
+
+## Changelog
+
+### 2026-03-24
+- **feat**: добавлена рубрика `cat_clip` — 2 клипа с котиками в VK Клипы (10:30 и 21:00), Pexels Video API
+- **fix**: Pexels 403 retry в `animal_clip` и `cat_clip` — полный Chrome User-Agent + авто-retry с другим видео при 403/404
+- **fix**: заголовок сторис теперь берёт первую строку, а не первое предложение
+
+### 2026-03-23
+- **fix**: VK клипы через `video.save` с `to_clips=1` + явный `wall.post`
+- **fix**: добавлена дедупликация тем `used_topics.json` для всех рубрик
