@@ -35,6 +35,7 @@ DEFAULT_SCHEDULE = [
     (9,  0,  "animal_clip",   "🐶 Животные утро (VK Клип)"),
     (9,  30, "history_fact",  "📅 История"),
     (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
+    (10, 30, "cat_clip",      "😸 Котики (VK Клип)"),
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
     (13, 0,  "animal_clip",   "🐱 Животные обед (VK Клип)"),
@@ -47,6 +48,7 @@ DEFAULT_SCHEDULE = [
     (19, 0,  "evening_fun",   "😄 Вечерний"),
     (20, 0,  "animal_clip",   "🐱 Животные ночь (VK Клип)"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
+    (21, 0,  "cat_clip",      "😹 Котики ночь (VK Клип)"),
     (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
 ]
 
@@ -386,6 +388,129 @@ class ContentScheduler:
                 logger.error(f"animal_clip failed: {e}", exc_info=True)
             return False
 
+        if rubric == "cat_clip":
+            """10:30 и 21:00 — VK Клип только с котиками (Pexels Video)."""
+            try:
+                import src.bot as bot_module
+                vk = getattr(bot_module, '_vk_publisher', None)
+                if not (vk and vk.enabled):
+                    logger.info("cat_clip skipped: VK not configured")
+                    return False
+
+                import os, json, random, time
+                from src.media_processor import MediaProcessor
+                import aiohttp as _aiohttp
+
+                # ── История просмотренных ID (отдельный файл от animal_clip) ──
+                history_path = os.path.normpath(
+                    os.path.join(self.config.media_dir, "..", "data", "cat_clip_history.json")
+                )
+                os.makedirs(os.path.dirname(history_path), exist_ok=True)
+                try:
+                    with open(history_path, "r") as hf:
+                        used_ids: list = json.load(hf)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    used_ids = []
+
+                # ── Только запросы с котиками ────────────────────────────────
+                cat_pools = [
+                    ["funny cat", "kitten playing"],
+                    ["cute kitten", "cat funny"],
+                    ["cat video", "kitten cute"],
+                    ["funny kitten", "cat silly"],
+                    ["cats playing", "kittens"],
+                ]
+                keywords = random.choice(cat_pools)
+
+                mp = MediaProcessor(
+                    pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                    media_dir=self.config.media_dir,
+                )
+
+                logger.info(f"cat_clip: searching Pexels for {keywords} (excluding {len(used_ids)} used)")
+                result = await mp.search_pexels_video(
+                    keywords,
+                    min_duration=5,
+                    max_duration=45,
+                    exclude_ids=used_ids,
+                )
+                if not result:
+                    result = await mp.search_pexels_video(
+                        ["cats"],
+                        min_duration=5,
+                        max_duration=60,
+                        exclude_ids=used_ids,
+                    )
+                if not result:
+                    logger.warning("cat_clip: no video found on Pexels, skipping")
+                    return False
+
+                pexels_vid_id, v_url = result
+
+                # ── Скачиваем видео ───────────────────────────────────────────
+                tmp_path = os.path.join(
+                    self.config.media_dir,
+                    f"cat_clip_{int(time.time())}.mp4"
+                )
+                dl_headers = {
+                    "Authorization": os.getenv("PEXELS_API_KEY", ""),
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://www.pexels.com/",
+                }
+                async with _aiohttp.ClientSession(headers=dl_headers) as sess:
+                    async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
+                        if resp.status != 200:
+                            logger.error(f"cat_clip: download failed HTTP {resp.status}")
+                            return False
+                        with open(tmp_path, "wb") as f:
+                            f.write(await resp.read())
+
+                file_mb = os.path.getsize(tmp_path) / 1024 / 1024
+                logger.info(f"cat_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
+
+                # ── Загружаем в VK Клипы ─────────────────────────────────────
+                captions = [
+                    "😸 Котики — лучшее лекарство",
+                    "🐱 Просто котик. Просто хорошо.",
+                    "😹 Ну как тут не улыбнуться?",
+                    "🐾 Котики заряжают позитивом!",
+                    "😻 Они просто наслаждаются жизнью",
+                    "🐱 Смотришь — и день стал лучше",
+                    "😸 Минута позитива с котиком",
+                    "🐾 Лучший контент в интернете — факт!",
+                ]
+                caption = random.choice(captions) + "\n\n📱 @IzhevskTodayNews"
+
+                clip_id = await vk.upload_clip(
+                    tmp_path,
+                    caption=caption,
+                    link_url="https://vk.com/izhevsk_segodnya",
+                )
+
+                # ── Чистим файл ───────────────────────────────────────────────
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+                if clip_id:
+                    used_ids.append(pexels_vid_id)
+                    if len(used_ids) > 500:
+                        used_ids = used_ids[-500:]
+                    try:
+                        with open(history_path, "w") as hf:
+                            json.dump(used_ids, hf)
+                    except Exception as he:
+                        logger.warning(f"cat_clip: failed to save history: {he}")
+                    logger.info(f"✅ VK Cat Clip published (video_id={clip_id}, pexels_id={pexels_vid_id})")
+                    return True
+                else:
+                    logger.warning("cat_clip: upload_clip returned None")
+                    return False
+
+            except Exception as e:
+                logger.error(f"cat_clip failed: {e}", exc_info=True)
+            return False
 
         if rubric == "cat_story":
             try:
