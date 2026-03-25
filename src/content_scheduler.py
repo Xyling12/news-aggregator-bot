@@ -180,7 +180,9 @@ class ContentScheduler:
 
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
-                    slot_key = f"{today_str}_{rubric}"
+                    # Include hour+minute so same rubric at different times fires independently
+                    # (e.g. animal_clip 4x/day, cat_clip 2x/day)
+                    slot_key = f"{today_str}_{hour:02d}{minute:02d}_{rubric}"
 
                     # Already published or permanently skipped?
                     if slot_key in self._published_today:

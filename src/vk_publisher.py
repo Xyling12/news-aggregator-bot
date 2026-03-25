@@ -460,6 +460,7 @@ class VKPublisher:
             "is_private": 0,
             "wallpost": 0,        # We'll post to wall manually if needed
             "repeat": 0,
+            "to_clips": 1,        # ← публикует в VK Клипы (Shorts/Reels раздел)
         }
         if link_url:
             save_params["link"] = link_url
