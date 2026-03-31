@@ -150,6 +150,12 @@ class ChannelMonitor:
                 await self.db.update_last_message_id(channel_username, msg_id)
                 continue
 
+            # Skip entertainment/greetings — we generate our own morning/evening/fun rubrics
+            if self._is_entertainment_post(text):
+                logger.info(f"@{channel_username}: skipping entertainment/greeting post")
+                await self.db.update_last_message_id(channel_username, msg_id)
+                continue
+
             # Save to database (store remote URL in media_file_id for fallback)
             post_id = await self.db.add_post(
                 source_channel=channel_username,
@@ -337,3 +343,17 @@ class ChannelMonitor:
         ]
         hits = sum(1 for w in weather_words if w in lower)
         return has_temperature and hits >= 2
+
+    @staticmethod
+    def _is_entertainment_post(text: str) -> bool:
+        """Check if post is a generic greeting or game (we generate our own)."""
+        lower = text.lower()
+        phrases = [
+            "доброе утро", "доброй ночи", "спокойной ночи",
+            "хорошего вечера", "прекрасного вечера", "отличных выходных",
+            "играем в города", "играем в слова", "играем ночами",
+            "поиграем в", "интерактив:", "вечерний интерактив",
+            "какой сегодня праздник", "гороскоп на",
+            "найди отличия", "загадка:"
+        ]
+        return any(p in lower for p in phrases)

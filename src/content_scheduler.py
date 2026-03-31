@@ -689,9 +689,17 @@ class ContentScheduler:
                 f"{rubric}: photo URL already used today — searching for alternative"
             )
             try:
+                import random
+                alt_quals = [
+                    ["city", "russia", "nature", "architecture"],
+                    ["beautiful", "landscape", "russia"],
+                    ["street", "urban", "russia"],
+                    ["nature", "scenic", "view", "russia"]
+                ]
                 alt_photos = await self.generator._media.search_stock_photo(
-                    ["city", "russia", "nature", "architecture"], count=5
+                    random.choice(alt_quals), count=25
                 )
+                random.shuffle(alt_photos)
                 for candidate in alt_photos:
                     alt_url = candidate.get("url", "")
                     if alt_url and alt_url not in self._used_photo_urls:

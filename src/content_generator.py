@@ -476,8 +476,14 @@ class ContentGenerator:
 
         # Search stock — take first result that has keyword in description (no Gemini)
         try:
-            photos = await self._media.search_stock_photo(keywords, count=5)
+            photos = await self._media.search_stock_photo(keywords, count=20)
             if photos:
+                import random
+                
+                # Ensure we randomize the slice so we don't always pick result #1
+                photos = photos[:15]
+                random.shuffle(photos)
+                
                 # Filter out people-heavy photos when topic is not about people
                 people_keywords = {"people", "family", "crowd", "friends", "children",
                                    "russian celebration", "team", "sport"}
@@ -766,6 +772,7 @@ class ContentGenerator:
             text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
         # Recipe photos: use food-specific keywords for better Unsplash results
         recipe_photo_map = {
+            # ── Удмуртская классика ──
             "перепеч": ["meat pie", "pastry baked"],
             "табан": ["pancakes", "traditional food"],
             "пельмен": ["dumplings", "homemade food"],
@@ -774,10 +781,46 @@ class ContentGenerator:
             "гриб": ["mushroom dish", "forest mushrooms"],
             "кокрок": ["pastry baked", "homemade bread"],
             "кисель": ["porridge oats", "traditional drink"],
+            "сяртчынянь": ["fish pie", "baked pastry"],
+            "окрошк": ["cold soup", "summer cold soup"],
+            "куарнянь": ["flatbread", "pan bread"],
+            # ── Уральская и камская кухня ──
+            "раз": ["meat cutlet", "potato dish"],
+            "запеканк": ["casserole dish", "baked food"],
+            "посикунчик": ["fried meat pie", "small pastries"],
+            "расстега": ["fish pie", "baked pastry"],
+            "драник": ["potato pancakes", "fried food"],
+            "жарко": ["meat stew in pot", "rustic food"],
+            "уха": ["fish soup", "cooking soup"],
+            # ── Русская домашняя кухня ──
             "суп": ["vegetable soup", "rustic cooking"],
             "хлеб": ["homemade bread", "bakery"],
             "блин": ["pancakes berries", "traditional food"],
             "пирог": ["berry pie", "fruit cake baked"],
+            "щи": ["cabbage soup", "hot soup"],
+            "борщ": ["red beetroot soup", "borscht"],
+            "солянк": ["meat soup", "hot soup bowl"],
+            "рассольник": ["soup with pickles", "hot soup"],
+            "каша": ["porridge bowl", "cereals"],
+            "тушёная картошк": ["potatoes and meat", "stewed potatoes"],
+            "котлет": ["meat cutlets", "fried meat"],
+            "голубц": ["stuffed cabbage rolls", "homemade food"],
+            "оладь": ["small pancakes", "fritters", "pancakes"],
+            "манник": ["semolina cake", "simple cake"],
+            "шарлотк": ["apple pie", "homemade cake"],
+            "вареник": ["dumplings", "pierogi"],
+            "плов": ["pilaf rice meat", "plov"],
+            "тефтел": ["meatballs in tomato sauce", "meatballs"],
+            "сырник": ["cottage cheese pancakes", "syrniki"],
+            # ── Сезонные и напитки ──
+            "варень": ["berry jam pot", "sweet preserves"],
+            "компот": ["fruit drink", "berry compote glass"],
+            "морс": ["cranberry juice glass", "red berry drink"],
+            "репа": ["stewed root vegetables", "rustic food"],
+            "грузд": ["pickled mushrooms", "marinated mushrooms"],
+            "огурц": ["pickled cucumbers jar", "fermented pickles"],
+            "икра": ["squash caviar", "vegetable spread"],
+            "чай": ["herbal tea cup", "tea with herbs"],
         }
         hint = ["food cooking", "homemade"]
         for key, val in recipe_photo_map.items():
