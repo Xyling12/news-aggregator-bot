@@ -192,7 +192,9 @@ class ContentScheduler:
                     if now.hour == hour and now.minute >= minute and now.minute < minute + 2:
                         logger.info(f"⏰ Time to publish: {label} ({rubric})")
                         try:
-                            await self._publish_rubric(rubric, label)
+                            ok = await self._publish_rubric(rubric, label)
+                            if not ok:
+                                raise RuntimeError(f"{rubric} returned False (nothing published)")
                             self._published_today.add(slot_key)
                             self._failed_slots.pop(slot_key, None)  # clear on success
                         except Exception as e:
@@ -216,7 +218,9 @@ class ContentScheduler:
                             continue  # Already gave up on this slot
                         logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{MAX_CATCH_UP_RETRIES}]")
                         try:
-                            await self._publish_rubric(rubric, label)
+                            ok = await self._publish_rubric(rubric, label)
+                            if not ok:
+                                raise RuntimeError(f"{rubric} returned False (nothing published)")
                             self._published_today.add(slot_key)
                             self._failed_slots.pop(slot_key, None)
                         except Exception as e:
@@ -263,6 +267,8 @@ class ContentScheduler:
                 if not (vk and vk.enabled):
                     logger.info("animal_clip skipped: VK not configured")
                     return False
+                if not getattr(vk, "user_token", ""):
+                    logger.warning("animal_clip: VK_USER_TOKEN is empty; video.save(to_clips=1) may fail")
 
                 import os, json, random, time
                 from src.media_processor import MediaProcessor
@@ -415,6 +421,8 @@ class ContentScheduler:
                 if not (vk and vk.enabled):
                     logger.info("cat_clip skipped: VK not configured")
                     return False
+                if not getattr(vk, "user_token", ""):
+                    logger.warning("cat_clip: VK_USER_TOKEN is empty; video.save(to_clips=1) may fail")
 
                 import os, json, random, time
                 from src.media_processor import MediaProcessor
