@@ -1466,6 +1466,14 @@ _DEFAULT_VK_COMPETITOR_KEYWORDS = [
 ]
 
 
+def _normalize_competitor_target(target: str) -> str:
+    value = (target or "").strip().lower()
+    value = re.sub(r"^https?://(www\.)?vk\.com/", "", value)
+    if value.startswith("@"):
+        value = value[1:]
+    return value.strip("/")
+
+
 async def _maybe_comment_competitor_post() -> None:
     """Leave a limited topical comment on competitor/community posts from group account."""
     if not (_config and _db and _vk_publisher and _vk_publisher.enabled):
@@ -1473,37 +1481,80 @@ async def _maybe_comment_competitor_post() -> None:
     if not _config.vk_competitor_commenting_enabled:
         return
 
-    targets = [x.strip() for x in _config.vk_competitor_targets if x.strip()]
+    targets_raw = [x.strip() for x in _config.vk_competitor_targets if x.strip()]
+    targets: list[tuple[str, str]] = []
+    seen_keys = set()
+    for target in targets_raw:
+        key = _normalize_competitor_target(target)
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        targets.append((target, key))
+
     if not targets:
         return
 
     now = dt.now()
     today = now.strftime("%Y-%m-%d")
 
-    # Enforce cooldown between attempts to avoid aggressive behavior.
-    last_action_raw = await _db.get_setting("vk_competitor_last_action_at", "")
-    if last_action_raw:
-        try:
-            last_action = dt.fromisoformat(last_action_raw)
-            if now - last_action < timedelta(minutes=_config.vk_competitor_min_gap_minutes):
-                return
-        except ValueError:
-            pass
+    day = await _db.get_setting("vk_competitor_comment_counts_day", "")
+    counts_raw = await _db.get_setting("vk_competitor_comment_counts_json", "{}")
+    cursor_raw = await _db.get_setting("vk_competitor_target_cursor", "0")
+    last_actions_raw = await _db.get_setting("vk_competitor_last_action_map_json", "{}")
 
-    day = await _db.get_setting("vk_competitor_comment_day", "")
-    count_raw = await _db.get_setting("vk_competitor_comment_count", "0")
     try:
-        count = int(count_raw or "0")
+        counts = json.loads(counts_raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        counts = {}
+    if not isinstance(counts, dict):
+        counts = {}
+
+    normalized_counts: dict[str, int] = {}
+    for key, value in counts.items():
+        k = _normalize_competitor_target(key)
+        if not k:
+            continue
+        try:
+            normalized_counts[k] = max(0, int(value))
+        except (ValueError, TypeError):
+            normalized_counts[k] = 0
+    counts = normalized_counts
+
+    try:
+        cursor = int(cursor_raw or "0")
     except ValueError:
-        count = 0
+        cursor = 0
+
+    try:
+        last_actions = json.loads(last_actions_raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        last_actions = {}
+    if not isinstance(last_actions, dict):
+        last_actions = {}
+
+    try:
+        per_target_limit = max(1, int(_config.vk_competitor_comments_per_day))
+    except (ValueError, TypeError):
+        per_target_limit = 1
 
     if day != today:
         day = today
-        count = 0
-        await _db.set_setting("vk_competitor_comment_day", today)
-        await _db.set_setting("vk_competitor_comment_count", "0")
+        counts = {}
+        await _db.set_setting("vk_competitor_comment_counts_day", today)
+        await _db.set_setting("vk_competitor_comment_counts_json", "{}")
+        await _db.set_setting("vk_competitor_comment_day", today)  # legacy key for visibility
+        await _db.set_setting("vk_competitor_comment_count", "0")  # legacy key for visibility
 
-    if count >= _config.vk_competitor_comments_per_day:
+    active_keys = {key for _, key in targets}
+    for key in list(counts.keys()):
+        if key not in active_keys:
+            counts.pop(key, None)
+    for key in list(last_actions.keys()):
+        norm_key = _normalize_competitor_target(key)
+        if not norm_key or norm_key not in active_keys:
+            last_actions.pop(key, None)
+
+    if all(counts.get(key, 0) >= per_target_limit for _, key in targets):
         return
 
     posted_raw = await _db.get_setting("vk_competitor_post_keys", "[]")
@@ -1513,18 +1564,39 @@ async def _maybe_comment_competitor_post() -> None:
         posted_keys = set()
 
     keywords = _config.vk_competitor_keywords or _DEFAULT_VK_COMPETITOR_KEYWORDS
-    candidate = await _vk_publisher.find_external_post_candidate(
-        targets,
-        keywords=keywords,
-        scan_limit=_config.vk_competitor_scan_limit,
-        skip_post_keys=posted_keys,
-    )
+    target_count = len(targets)
+    cursor = cursor % target_count
+    ordered_targets = targets[cursor:] + targets[:cursor]
+    candidate = None
+    selected_key = ""
+    selected_raw_target = ""
+    next_cursor = (cursor + 1) % target_count
 
-    # Record attempt time even when nothing matched to reduce noisy scans.
-    await _db.set_setting(
-        "vk_competitor_last_action_at",
-        now.isoformat(timespec="seconds"),
-    )
+    for idx, (raw_target, key) in enumerate(ordered_targets):
+        if counts.get(key, 0) >= per_target_limit:
+            continue
+        last_action_raw = last_actions.get(key)
+        if last_action_raw:
+            try:
+                last_action = dt.fromisoformat(last_action_raw)
+                if now - last_action < timedelta(minutes=_config.vk_competitor_min_gap_minutes):
+                    continue
+            except ValueError:
+                pass
+        one_candidate = await _vk_publisher.find_external_post_candidate(
+            [raw_target],
+            keywords=keywords,
+            scan_limit=_config.vk_competitor_scan_limit,
+            skip_post_keys=posted_keys,
+        )
+        if one_candidate:
+            candidate = one_candidate
+            selected_key = key
+            selected_raw_target = raw_target
+            next_cursor = (cursor + idx + 1) % target_count
+            break
+
+    await _db.set_setting("vk_competitor_target_cursor", str(next_cursor))
 
     if not candidate:
         return
@@ -1541,15 +1613,23 @@ async def _maybe_comment_competitor_post() -> None:
     posted_keys.add(candidate["post_key"])
     posted_keys_list = list(posted_keys)[-200:]
     await _db.set_setting("vk_competitor_post_keys", json.dumps(posted_keys_list, ensure_ascii=False))
-    await _db.set_setting("vk_competitor_comment_day", today)
-    await _db.set_setting("vk_competitor_comment_count", str(count + 1))
+    counts[selected_key] = counts.get(selected_key, 0) + 1
+    total_today = sum(counts.values())
+    last_actions[selected_key] = now.isoformat(timespec="seconds")
+    await _db.set_setting("vk_competitor_comment_counts_day", today)
+    await _db.set_setting("vk_competitor_comment_counts_json", json.dumps(counts, ensure_ascii=False))
+    await _db.set_setting("vk_competitor_last_action_map_json", json.dumps(last_actions, ensure_ascii=False))
+    await _db.set_setting("vk_competitor_comment_day", today)  # legacy key for visibility
+    await _db.set_setting("vk_competitor_comment_count", str(total_today))  # legacy key for visibility
+    await _db.set_setting("vk_competitor_last_action_at", now.isoformat(timespec="seconds"))  # legacy key for visibility
 
     logger.info(
-        "VK outreach comment created: target=%s post=%s count=%s/%s",
-        candidate["target"],
+        "VK outreach comment created: target=%s post=%s target_count=%s/%s total_today=%s",
+        selected_raw_target or candidate["target"],
         candidate["post_key"],
-        count + 1,
-        _config.vk_competitor_comments_per_day,
+        counts[selected_key],
+        per_target_limit,
+        total_today,
     )
 
     for admin_id in _config.admin_ids:
@@ -1557,8 +1637,9 @@ async def _maybe_comment_competitor_post() -> None:
             await _bot.send_message(
                 admin_id,
                 "VK outreach: комментарий оставлен от лица группы "
-                f"({count + 1}/{_config.vk_competitor_comments_per_day} сегодня)\n"
-                f"Цель: {candidate['target']}\n"
+                f"({counts[selected_key]}/{per_target_limit} для этого паблика сегодня)\n"
+                f"Цель: {selected_raw_target or candidate['target']}\n"
+                f"Всего сегодня: {total_today}\n"
                 f"Пост: https://vk.com/wall{candidate['post_key']}",
             )
         except Exception:
