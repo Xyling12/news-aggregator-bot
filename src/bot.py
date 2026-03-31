@@ -1393,6 +1393,16 @@ async def _publish_post(post: dict) -> bool:
             )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
+                import random
+                # Engagement bait for smart feed
+                comments = [
+                    "А что вы думаете об этом? Пишите в комментариях 👇",
+                    "Ваше мнение? Делитесь в комментариях 👇",
+                    "Согласны с этим? Ждем ваше мнение в комментариях 👇",
+                    "Сталкивались с подобным? Расскажите в комментариях 👇"
+                ]
+                await asyncio.sleep(2)
+                await _vk_publisher.create_comment(vk_post_id, random.choice(comments))
             else:
                 logger.warning(f"Post #{post['id']} VK crosspost failed — publish() returned None")
         except Exception as e:

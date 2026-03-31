@@ -517,22 +517,18 @@ class StoryGenerator:
 
         base_img = self._crop_and_resize(base_img, W, H)
         
-        # Add a subtle gradient at the bottom so we can put text, or just leave it bare
-        dark_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        draw_overlay = ImageDraw.Draw(dark_overlay)
-        # Gradient bottom half
-        for y in range(H//2, H):
-            alpha = int(((y - H//2) / (H//2)) * 180)
-            draw_overlay.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
-            
+        # Darken the whole image slightly for premium feel
+        dark_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 40))
         base_img = base_img.convert("RGBA")
         combined = Image.alpha_composite(base_img, dark_overlay)
         
         draw = ImageDraw.Draw(combined)
         try:
             font_title = ImageFont.truetype(self.font_bold_path, 80)
+            font_brand = ImageFont.truetype(self.font_reg_path, 40)
         except:
             font_title = ImageFont.load_default()
+            font_brand = ImageFont.load_default()
 
         # Time-aware text selection (no emojis for PIL safety)
         import random
@@ -561,7 +557,39 @@ class StoryGenerator:
             ]
         text_str = random.choice(texts)
         tw = draw.textlength(text_str, font=font_title)
-        draw.text(((W - tw) // 2, 1600), text_str, font=font_title, fill=(255, 255, 255, 255))
+        
+        # Draw Glass Pill for the text
+        pill_w = tw + 120
+        pill_h = 160
+        pill_x1 = (W - pill_w) // 2
+        pill_y1 = 1550
+        pill_x2 = pill_x1 + pill_w
+        pill_y2 = pill_y1 + pill_h
+        
+        glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        glass_draw = ImageDraw.Draw(glass)
+        
+        # Outer light border
+        glass_draw.rounded_rectangle(
+            [(pill_x1 - 4, pill_y1 - 4), (pill_x2 + 4, pill_y2 + 4)],
+            radius=50, fill=(255, 255, 255, 20)
+        )
+        # Inner dark glass
+        glass_draw.rounded_rectangle(
+            [(pill_x1, pill_y1), (pill_x2, pill_y2)],
+            radius=46, fill=(0, 0, 0, 140)
+        )
+        
+        combined = Image.alpha_composite(combined, glass)
+        draw = ImageDraw.Draw(combined)
+        
+        # Text centered in pill
+        draw.text(((W - tw) // 2, pill_y1 + 35), text_str, font=font_title, fill=(255, 255, 255, 255))
+        
+        # Brand watermark at the very bottom
+        brand = "ИЖЕВСК СЕГОДНЯ"
+        bw = draw.textlength(brand, font=font_brand)
+        draw.text(((W - bw) // 2, 1780), brand, font=font_brand, fill=(255, 255, 255, 120))
         
         final_img = combined.convert("RGB")
         out_bytes = io.BytesIO()
@@ -619,9 +647,20 @@ class StoryGenerator:
                 fontsize=80,
                 x='(w-text_w)/2',
                 y='(h-text_h)/2',
-                shadowcolor='black',
-                shadowx=2,
-                shadowy=2
+                box=1,
+                boxcolor='black@0.6',
+                boxborderw=30
+            )
+            
+            # Add watermark at bottom
+            stream = ffmpeg.filter(
+                stream, 'drawtext',
+                fontfile=font_path_ff,
+                text="ИЖЕВСК СЕГОДНЯ",
+                fontcolor='white@0.5',
+                fontsize=50,
+                x='(w-text_w)/2',
+                y='h-150'
             )
             
             # Output

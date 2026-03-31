@@ -265,8 +265,9 @@ class VKPublisher:
 
         vk_text += (
             "\n\n─ ─ ─ ─ ─\n"
-            "📱 Telegram: t.me/IzhevskTodayNews\n"
-            "📩 Прислать новость: vk.com/im/convo/-236380336"
+            "📸 Есть новость, фото или проблема в городе?\n"
+            "Присылай нам в сообщения группы (опубликуем): vk.com/im/convo/-236380336\n"
+            "📱 Наш Telegram: t.me/IzhevskTodayNews"
         )
 
         params = {
@@ -461,6 +462,7 @@ class VKPublisher:
             "wallpost": 0,        # We'll post to wall manually if needed
             "repeat": 0,
             "to_clips": 1,        # ← публикует в VK Клипы (Shorts/Reels раздел)
+            "_token_override": self.user_token, # REQUIRED: Only user tokens can upload clips
         }
         if link_url:
             save_params["link"] = link_url
@@ -504,28 +506,35 @@ class VKPublisher:
             logger.error(f"VK Clip upload error: {type(e).__name__}: {e}")
             return None
 
-        # Step 3: Post the clip to the community wall so it appears in Клипы feed
+        # Step 3: VK automatically processes and publishes the clip when `to_clips=1`.
+        # DO NOT call `wall.post` manually with the clip attachment — it will cause False/Error 100.
         if video_id and owner_id:
-            attachment = f"video{owner_id}_{video_id}"
-            wall_params = {
-                "owner_id": -int(self.group_id),
-                "from_group": 1,
-                "message": caption[:4096] if caption else "",
-                "attachments": attachment,
-            }
-            wall_result = await self._api_call("wall.post", **wall_params)
-            if wall_result and "post_id" in wall_result:
-                logger.info(
-                    f"✅ VK Clip published: vk.com/wall-{self.group_id}_{wall_result['post_id']} "
-                    f"(video {attachment})"
-                )
-                return video_id
-            else:
-                logger.warning(f"VK Clip uploaded but wall.post failed: {wall_result}")
-                # Video is still uploaded — return its ID
-                return video_id
+            logger.info(f"✅ VK Clip uploaded successfully (video_id={video_id}) and sent to processing.")
+            return video_id
 
         logger.error("VK Clip: video_id missing from save response")
+        return None
+
+    async def create_comment(self, post_id: int, message: str) -> Optional[int]:
+        """
+        Create a comment on a wall post from behalf of the group.
+        Used to spark engagement (first comment bait).
+        """
+        if not post_id or not message:
+            return None
+            
+        params = {
+            "owner_id": -int(self.group_id),
+            "post_id": post_id,
+            "from_group": int(self.group_id),
+            "message": message,
+        }
+        result = await self._api_call("wall.createComment", **params)
+        if result and "comment_id" in result:
+            logger.info(f"✅ First comment added to post {post_id}: {message[:40]}...")
+            return result["comment_id"]
+            
+        logger.error(f"Failed to create first comment on post {post_id}")
         return None
 
 
