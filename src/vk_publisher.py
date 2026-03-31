@@ -8,6 +8,7 @@ import logging
 import re
 import os
 import tempfile
+import random
 from typing import Optional
 
 import aiohttp
@@ -20,6 +21,48 @@ class VKPublisher:
 
     API_VERSION = "5.199"
     API_BASE = "https://api.vk.com/method"
+    DEFAULT_VK_SEO_TAGS = [
+        "#Ижевск",
+        "#Удмуртия",
+        "#НовостиИжевска",
+        "#НовостиУдмуртии",
+        "#Новости",
+    ]
+    SEO_TOPIC_RULES = [
+        (("дтп", "авар", "пожар", "чп", "краж", "мошен"), ["#Происшествия", "#Безопасность"]),
+        (("жкх", "отоплен", "вода", "коммунал"), ["#ЖКХ", "#Город"]),
+        (("дорог", "автобус", "трамва", "маршрут", "пробк"), ["#Транспорт", "#Дороги"]),
+        (("мэр", "глава", "администрац", "депутат", "дума"), ["#Власть", "#Город"]),
+        (("школ", "детсад", "универс", "образован"), ["#Образование", "#Дети"]),
+        (("больниц", "поликлиник", "медици", "врач"), ["#Здоровье", "#Медицина"]),
+        (("спорт", "матч", "турнир", "чемпион"), ["#Спорт"]),
+        (("погод", "мороз", "снег", "дожд"), ["#Погода"]),
+        (("работ", "зарплат", "бизнес", "налог", "цен"), ["#Экономика", "#Работа"]),
+        (("концерт", "театр", "фестивал", "выставк"), ["#Культура", "#Афиша"]),
+    ]
+    COMMENT_TOPIC_RULES = [
+        (("дтп", "авар", "пожар", "чп"), [
+            "Спасибо за оперативную информацию. Берегите себя и близких.",
+            "Важная тема. Надеемся, что пострадавшим быстро окажут помощь.",
+        ]),
+        (("жкх", "отоплен", "вода", "коммунал"), [
+            "Тема действительно важная для жителей. Спасибо, что подсвечиваете.",
+            "Надеемся, по этому вопросу дадут конкретные сроки решения.",
+        ]),
+        (("дорог", "маршрут", "автобус", "трамва"), [
+            "Хорошо, что поднимаете вопрос транспорта. Это влияет на всех каждый день.",
+            "Спасибо за новость. Будем следить за развитием ситуации.",
+        ]),
+        (("школ", "детсад", "образован"), [
+            "Спасибо за освещение темы. Для семей с детьми это особенно важно.",
+            "Полезная новость для родителей, благодарим за информацию.",
+        ]),
+    ]
+    GENERIC_COMMENT_TEMPLATES = [
+        "Спасибо за полезную публикацию. Тема точно заслуживает обсуждения.",
+        "Благодарим за информацию. Вопрос важный для жителей города.",
+        "Полезный пост, спасибо. Будем следить за обновлениями по теме.",
+    ]
 
     def __init__(self, access_token: str, group_id: str, user_token: str = ""):
         self.access_token = access_token
@@ -81,6 +124,127 @@ class VKPublisher:
         text = text.strip()
 
         return text
+
+    @staticmethod
+    def _normalize_hashtag(tag: str) -> str:
+        tag = re.sub(r"[^A-Za-zА-Яа-яЁё0-9_]", "", tag)
+        return f"#{tag}" if tag else ""
+
+    def _append_vk_seo_tags(self, text: str, max_tags: int = 9) -> str:
+        if max_tags <= 0:
+            return text
+
+        found = re.findall(r"(?<!\w)#([A-Za-zА-Яа-яЁё0-9_]+)", text)
+        existing = [self._normalize_hashtag(t) for t in found]
+        existing = [t for t in existing if t]
+
+        tags: list[str] = []
+        seen = set()
+
+        def add_tag(raw_tag: str):
+            tag = self._normalize_hashtag(raw_tag.lstrip("#"))
+            if not tag:
+                return
+            key = tag.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            tags.append(tag)
+
+        for tag in existing:
+            add_tag(tag)
+
+        for tag in self.DEFAULT_VK_SEO_TAGS:
+            add_tag(tag)
+
+        text_wo_tags = re.sub(r"(?<!\w)#[A-Za-zА-Яа-яЁё0-9_]+", " ", text.lower())
+        for keywords, seo_tags in self.SEO_TOPIC_RULES:
+            if any(kw in text_wo_tags for kw in keywords):
+                for tag in seo_tags:
+                    add_tag(tag)
+
+        tags = tags[:max_tags]
+        if not tags:
+            return text
+
+        text_without_tag_lines = re.sub(r"(?m)^\s*(?:#[A-Za-zА-Яа-яЁё0-9_]+\s*)+$", "", text).strip()
+        return f"{text_without_tag_lines}\n\n{' '.join(tags)}"
+
+    @staticmethod
+    def _normalize_wall_target(target: str) -> dict:
+        value = (target or "").strip()
+        value = re.sub(r"^https?://(www\.)?vk\.com/", "", value, flags=re.IGNORECASE)
+        value = value.strip("/")
+        if value.startswith("@"):
+            value = value[1:]
+
+        if re.fullmatch(r"-?\d+", value):
+            owner_id = int(value)
+            if owner_id > 0:
+                owner_id = -owner_id
+            return {"owner_id": owner_id}
+
+        m = re.fullmatch(r"(?:club|public)(\d+)", value, flags=re.IGNORECASE)
+        if m:
+            return {"owner_id": -int(m.group(1))}
+
+        return {"domain": value}
+
+    async def find_external_post_candidate(
+        self,
+        targets: list[str],
+        *,
+        keywords: list[str],
+        scan_limit: int = 6,
+        skip_post_keys: Optional[set[str]] = None,
+    ) -> Optional[dict]:
+        skip = skip_post_keys or set()
+        normalized_keywords = [k.lower().strip() for k in keywords if k.strip()]
+
+        for raw_target in targets:
+            params = self._normalize_wall_target(raw_target)
+            params.update({"count": max(3, min(20, scan_limit)), "filter": "owner"})
+            wall = await self._api_call("wall.get", **params)
+            if not wall or "items" not in wall:
+                continue
+
+            for item in wall.get("items", []):
+                owner_id = item.get("owner_id")
+                post_id = item.get("id")
+                text = (item.get("text") or "").strip()
+                if not owner_id or not post_id or len(text) < 40:
+                    continue
+                if item.get("marked_as_ads") == 1 or item.get("is_deleted") == 1:
+                    continue
+                if item.get("copy_history"):
+                    continue
+                comments_meta = item.get("comments", {})
+                if isinstance(comments_meta, dict) and comments_meta.get("can_post") == 0:
+                    continue
+
+                post_key = f"{owner_id}_{post_id}"
+                if post_key in skip:
+                    continue
+
+                text_lower = text.lower()
+                if normalized_keywords and not any(kw in text_lower for kw in normalized_keywords):
+                    continue
+
+                return {
+                    "owner_id": owner_id,
+                    "post_id": post_id,
+                    "text": text,
+                    "post_key": post_key,
+                    "target": raw_target,
+                }
+        return None
+
+    def build_thematic_comment(self, post_text: str) -> str:
+        text_lower = (post_text or "").lower()
+        for keywords, templates in self.COMMENT_TOPIC_RULES:
+            if any(kw in text_lower for kw in keywords):
+                return random.choice(templates)
+        return random.choice(self.GENERIC_COMMENT_TEMPLATES)
 
     async def _api_call(self, method: str, **params) -> Optional[dict]:
         """Make a VK API call.
@@ -242,6 +406,9 @@ class VKPublisher:
         text: str,
         photo_url: Optional[str] = None,
         photo_path: Optional[str] = None,
+        *,
+        seo_enabled: bool = True,
+        seo_max_tags: int = 9,
     ) -> Optional[int]:
         """
         Publish a post to the VK community wall.
@@ -256,19 +423,19 @@ class VKPublisher:
         """
         # Convert HTML to VK-compatible text
         vk_text = self._html_to_vk(text)
-
-        # Truncate to VK wall post limit (16384 chars)
-        if len(vk_text) > 16000:
-            vk_text = vk_text[:16000] + "..."
-
-
-
         vk_text += (
             "\n\n─ ─ ─ ─ ─\n"
             "📸 Есть новость, фото или проблема в городе?\n"
             "Присылай нам в сообщения группы (опубликуем): vk.com/im/convo/-236380336\n"
             "📱 Наш Telegram: t.me/IzhevskTodayNews"
         )
+
+        if seo_enabled:
+            vk_text = self._append_vk_seo_tags(vk_text, max_tags=seo_max_tags)
+
+        # Truncate to VK wall post limit (16384 chars)
+        if len(vk_text) > 16000:
+            vk_text = vk_text[:16000] + "..."
 
         params = {
             "owner_id": -int(self.group_id),
@@ -515,7 +682,13 @@ class VKPublisher:
         logger.error("VK Clip: video_id missing from save response")
         return None
 
-    async def create_comment(self, post_id: int, message: str) -> Optional[int]:
+    async def create_comment(
+        self,
+        post_id: int,
+        message: str,
+        *,
+        owner_id: Optional[int] = None,
+    ) -> Optional[int]:
         """
         Create a comment on a wall post from behalf of the group.
         Used to spark engagement (first comment bait).
@@ -524,7 +697,7 @@ class VKPublisher:
             return None
             
         params = {
-            "owner_id": -int(self.group_id),
+            "owner_id": owner_id if owner_id is not None else -int(self.group_id),
             "post_id": post_id,
             "from_group": int(self.group_id),
             "message": message,

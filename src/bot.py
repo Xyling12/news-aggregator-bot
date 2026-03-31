@@ -3,11 +3,12 @@ Telegram Bot — Aiogram 3 bot for admin moderation, post management, and publis
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
 import traceback
-from datetime import datetime as dt
+from datetime import datetime as dt, timedelta
 from typing import Optional
 
 import aiohttp
@@ -1390,6 +1391,8 @@ async def _publish_post(post: dict) -> bool:
                 text,
                 photo_url=photo_for_vk_url,
                 photo_path=photo_for_vk_path,
+                seo_enabled=_config.vk_seo_enabled,
+                seo_max_tags=_config.vk_seo_max_tags,
             )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
@@ -1450,6 +1453,117 @@ async def _publish_post(post: dict) -> bool:
 
 
 # ── Post Processing Pipeline ────────────────────────────────────────────
+
+_DEFAULT_VK_COMPETITOR_KEYWORDS = [
+    "ижевск",
+    "удмурт",
+    "дтп",
+    "жкх",
+    "транспорт",
+    "дорог",
+    "школ",
+    "больниц",
+]
+
+
+async def _maybe_comment_competitor_post() -> None:
+    """Leave a limited topical comment on competitor/community posts from group account."""
+    if not (_config and _db and _vk_publisher and _vk_publisher.enabled):
+        return
+    if not _config.vk_competitor_commenting_enabled:
+        return
+
+    targets = [x.strip() for x in _config.vk_competitor_targets if x.strip()]
+    if not targets:
+        return
+
+    now = dt.now()
+    today = now.strftime("%Y-%m-%d")
+
+    # Enforce cooldown between attempts to avoid aggressive behavior.
+    last_action_raw = await _db.get_setting("vk_competitor_last_action_at", "")
+    if last_action_raw:
+        try:
+            last_action = dt.fromisoformat(last_action_raw)
+            if now - last_action < timedelta(minutes=_config.vk_competitor_min_gap_minutes):
+                return
+        except ValueError:
+            pass
+
+    day = await _db.get_setting("vk_competitor_comment_day", "")
+    count_raw = await _db.get_setting("vk_competitor_comment_count", "0")
+    try:
+        count = int(count_raw or "0")
+    except ValueError:
+        count = 0
+
+    if day != today:
+        day = today
+        count = 0
+        await _db.set_setting("vk_competitor_comment_day", today)
+        await _db.set_setting("vk_competitor_comment_count", "0")
+
+    if count >= _config.vk_competitor_comments_per_day:
+        return
+
+    posted_raw = await _db.get_setting("vk_competitor_post_keys", "[]")
+    try:
+        posted_keys = set(json.loads(posted_raw or "[]"))
+    except (json.JSONDecodeError, TypeError):
+        posted_keys = set()
+
+    keywords = _config.vk_competitor_keywords or _DEFAULT_VK_COMPETITOR_KEYWORDS
+    candidate = await _vk_publisher.find_external_post_candidate(
+        targets,
+        keywords=keywords,
+        scan_limit=_config.vk_competitor_scan_limit,
+        skip_post_keys=posted_keys,
+    )
+
+    # Record attempt time even when nothing matched to reduce noisy scans.
+    await _db.set_setting(
+        "vk_competitor_last_action_at",
+        now.isoformat(timespec="seconds"),
+    )
+
+    if not candidate:
+        return
+
+    comment_text = _vk_publisher.build_thematic_comment(candidate["text"])
+    comment_id = await _vk_publisher.create_comment(
+        candidate["post_id"],
+        comment_text,
+        owner_id=candidate["owner_id"],
+    )
+    if not comment_id:
+        return
+
+    posted_keys.add(candidate["post_key"])
+    posted_keys_list = list(posted_keys)[-200:]
+    await _db.set_setting("vk_competitor_post_keys", json.dumps(posted_keys_list, ensure_ascii=False))
+    await _db.set_setting("vk_competitor_comment_day", today)
+    await _db.set_setting("vk_competitor_comment_count", str(count + 1))
+
+    logger.info(
+        "VK outreach comment created: target=%s post=%s count=%s/%s",
+        candidate["target"],
+        candidate["post_key"],
+        count + 1,
+        _config.vk_competitor_comments_per_day,
+    )
+
+    for admin_id in _config.admin_ids:
+        try:
+            await _bot.send_message(
+                admin_id,
+                "VK outreach: комментарий оставлен от лица группы "
+                f"({count + 1}/{_config.vk_competitor_comments_per_day} сегодня)\n"
+                f"Цель: {candidate['target']}\n"
+                f"Пост: https://vk.com/wall{candidate['post_key']}",
+            )
+        except Exception:
+            pass
+
 
 async def process_new_post(post_id: int):
     """Full processing pipeline for a new post: rewrite + media check + send for review."""
@@ -1731,6 +1845,11 @@ async def auto_publish_loop():
 
             if not _config or not _db:
                 continue
+
+            try:
+                await _maybe_comment_competitor_post()
+            except Exception as outreach_err:
+                logger.warning(f"VK outreach comment failed: {outreach_err}")
 
             interval = _config.publish_interval
             import time

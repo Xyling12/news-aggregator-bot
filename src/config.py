@@ -65,6 +65,14 @@ class Config:
     vk_access_token: str = ""     # Group token — for wall posts
     vk_user_token: str = ""       # User token — for photo uploads (needs 'photos' scope)
     vk_group_id: str = ""
+    vk_seo_enabled: bool = True
+    vk_seo_max_tags: int = 9
+    vk_competitor_commenting_enabled: bool = False
+    vk_competitor_targets: List[str] = field(default_factory=list)
+    vk_competitor_keywords: List[str] = field(default_factory=list)
+    vk_competitor_comments_per_day: int = 2
+    vk_competitor_min_gap_minutes: int = 480
+    vk_competitor_scan_limit: int = 6
 
     # Optional: MAX crossposting
     max_bot_token: str = ""
@@ -121,14 +129,22 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         """Create Config from environment variables."""
+        def _split_csv(name: str) -> List[str]:
+            raw = os.getenv(name, "")
+            return [x.strip() for x in raw.split(",") if x.strip()]
+
+        def _env_bool(name: str, default: bool) -> bool:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+
         admin_ids_raw = os.getenv("ADMIN_IDS", "")
         admin_ids = [int(x.strip()) for x in admin_ids_raw.split(",") if x.strip()]
 
-        source_channels_raw = os.getenv("SOURCE_CHANNELS", "")
-        source_channels = [x.strip() for x in source_channels_raw.split(",") if x.strip()]
+        source_channels = _split_csv("SOURCE_CHANNELS")
 
-        gemini_model_names_raw = os.getenv("GEMINI_MODEL_NAMES", "")
-        gemini_model_names = [x.strip() for x in gemini_model_names_raw.split(",") if x.strip()]
+        gemini_model_names = _split_csv("GEMINI_MODEL_NAMES")
 
         # Support multiple Gemini keys: GEMINI_API_KEYS=key1,key2 or fallback to GEMINI_API_KEY
         gemini_api_keys_raw = os.getenv("GEMINI_API_KEYS", "")
@@ -162,6 +178,20 @@ class Config:
             vk_access_token=os.getenv("VK_ACCESS_TOKEN", ""),
             vk_user_token=os.getenv("VK_USER_TOKEN", ""),
             vk_group_id=os.getenv("VK_GROUP_ID", ""),
+            vk_seo_enabled=_env_bool("VK_SEO_ENABLED", True),
+            vk_seo_max_tags=max(3, min(15, int(os.getenv("VK_SEO_MAX_TAGS", "9")))),
+            vk_competitor_commenting_enabled=_env_bool("VK_COMPETITOR_COMMENTING_ENABLED", False),
+            vk_competitor_targets=_split_csv("VK_COMPETITOR_TARGETS"),
+            vk_competitor_keywords=_split_csv("VK_COMPETITOR_KEYWORDS"),
+            vk_competitor_comments_per_day=max(
+                1, min(5, int(os.getenv("VK_COMPETITOR_COMMENTS_PER_DAY", "2")))
+            ),
+            vk_competitor_min_gap_minutes=max(
+                30, int(os.getenv("VK_COMPETITOR_MIN_GAP_MINUTES", "480"))
+            ),
+            vk_competitor_scan_limit=max(
+                3, min(20, int(os.getenv("VK_COMPETITOR_SCAN_LIMIT", "6")))
+            ),
             max_bot_token=os.getenv("MAX_BOT_TOKEN", ""),
             max_chat_id=os.getenv("MAX_CHAT_ID", ""),
             pexels_api_key=os.getenv("PEXELS_API_KEY", ""),
@@ -201,4 +231,3 @@ class Config:
         val = await db.get_setting("auto_publish")
         if val is not None:
             self.auto_publish = val.lower() == "true"
-
