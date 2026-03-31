@@ -619,6 +619,9 @@ class VKPublisher:
         if file_size > 256 * 1024 * 1024:  # 256 MB VK limit
             logger.error(f"Clip video too large: {file_size / 1024 / 1024:.1f} MB (max 256 MB)")
             return None
+        if not self.user_token:
+            logger.error("VK Clip upload skipped: VK_USER_TOKEN is empty")
+            return None
 
         # Step 1: Save video object — get upload server URL
         save_params: dict = {

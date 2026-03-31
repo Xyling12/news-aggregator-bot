@@ -448,6 +448,8 @@ class MediaProcessor:
         max_duration: int = 30,
         min_quality_px: int = 1080,   # min pixels on longer side (HD threshold)
         exclude_ids: Optional[List[int]] = None,   # already-used Pexels video IDs
+        max_pages: int = 3,
+        allow_repeat_fallback: bool = True,
     ) -> Optional[tuple]:
         """Search Pexels for short portrait videos. Requires PEXELS_API_KEY.
 
@@ -472,14 +474,19 @@ class MediaProcessor:
         proxy_url = os.getenv("PEXELS_PROXY", "").strip()
         use_proxy = bool(proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"))
 
-        async def _fetch_videos(with_proxy: bool):
+        async def _fetch_videos(with_proxy: bool, page: int):
             if with_proxy:
                 connector = ProxyConnector.from_url(proxy_url)
                 sess = aiohttp.ClientSession(connector=connector, headers=headers)
             else:
                 sess = aiohttp.ClientSession(headers=headers)
             async with sess as session:
-                params = {"query": query, "per_page": 15, "orientation": "portrait"}
+                params = {
+                    "query": query,
+                    "per_page": 15,
+                    "page": page,
+                    "orientation": "portrait",
+                }
                 async with session.get(
                     "https://api.pexels.com/videos/search",
                     params=params,
@@ -490,23 +497,38 @@ class MediaProcessor:
                         return None
                     return (await resp.json()).get("videos", [])
 
-        try:
-            videos = await _fetch_videos(with_proxy=use_proxy)
-        except Exception as e:
-            if use_proxy:
-                logger.warning(f"Pexels Video proxy failed ({e}) — retrying direct")
-                try:
-                    videos = await _fetch_videos(with_proxy=False)
-                except Exception as e2:
-                    logger.error(f"Pexels Video direct also failed: {e2}")
+        videos: list = []
+        for page in range(1, max_pages + 1):
+            page_videos = None
+            try:
+                page_videos = await _fetch_videos(with_proxy=use_proxy, page=page)
+            except Exception as e:
+                if use_proxy:
+                    logger.warning(f"Pexels Video proxy failed ({e}) — retrying direct")
+                    try:
+                        page_videos = await _fetch_videos(with_proxy=False, page=page)
+                    except Exception as e2:
+                        logger.error(f"Pexels Video direct also failed: {e2}")
+                        return None
+                else:
+                    logger.error(f"Pexels Video search failed: {e}")
                     return None
-            else:
-                logger.error(f"Pexels Video search failed: {e}")
-                return None
+
+            if not page_videos:
+                break
+            videos.extend(page_videos)
 
         if not videos:
             logger.warning(f"Pexels Video: no results for '{query}'")
             return None
+
+        # Keep first occurrence only (stable order), then randomize for variety.
+        uniq = {}
+        for v in videos:
+            vid = v.get("id")
+            if vid and vid not in uniq:
+                uniq[vid] = v
+        videos = list(uniq.values())
 
         import random
         random.shuffle(videos)
@@ -527,30 +549,45 @@ class MediaProcessor:
             )
             return hd_files[0].get("link")
 
-        # Pass 1: duration filter + HD + not already used
-        for vid in videos:
-            vid_id = vid.get("id")
-            if vid_id in exclude_ids:
-                continue
-            duration = vid.get("duration", 0)
-            if min_duration <= duration <= max_duration:
+        def _pick_video(ignore_exclude: bool = False) -> Optional[tuple]:
+            # Pass 1: duration filter + HD
+            for vid in videos:
+                vid_id = vid.get("id")
+                if not ignore_exclude and vid_id in exclude_ids:
+                    continue
+                duration = vid.get("duration", 0)
+                if min_duration <= duration <= max_duration:
+                    url = _best_hd_file(vid.get("video_files", []))
+                    if url:
+                        logger.info(
+                            f"Pexels Video: selected id={vid_id} "
+                            f"duration={duration}s quality=HD query='{query}'"
+                        )
+                        return (vid_id, url)
+
+            # Pass 2: relax duration, still require HD
+            for vid in videos:
+                vid_id = vid.get("id")
+                if not ignore_exclude and vid_id in exclude_ids:
+                    continue
                 url = _best_hd_file(vid.get("video_files", []))
                 if url:
-                    logger.info(
-                        f"Pexels Video: selected id={vid_id} "
-                        f"duration={duration}s quality=HD query='{query}'"
-                    )
+                    logger.info(f"Pexels Video: relaxed-duration id={vid_id} query='{query}'")
                     return (vid_id, url)
+            return None
 
-        # Pass 2: relax duration, still require HD
-        for vid in videos:
-            vid_id = vid.get("id")
-            if vid_id in exclude_ids:
-                continue
-            url = _best_hd_file(vid.get("video_files", []))
-            if url:
-                logger.info(f"Pexels Video: relaxed-duration id={vid_id} query='{query}'")
-                return (vid_id, url)
+        selected = _pick_video(ignore_exclude=False)
+        if selected:
+            return selected
+
+        if allow_repeat_fallback and exclude_ids:
+            logger.info(
+                "Pexels Video: no fresh HD videos left after exclude_ids; "
+                "falling back to repeats"
+            )
+            selected = _pick_video(ignore_exclude=True)
+            if selected:
+                return selected
 
         logger.warning(f"Pexels Video: no HD results for '{query}'")
         return None

@@ -205,7 +205,7 @@ class ContentScheduler:
                                 msg = (
                                     f"⚠️ Scheduler: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
                                     f"Причина: {e}\n"
-                                    f"Проверь квоту Gemini API или добавь GROQ_API_KEY в env."
+                                    "Проверь env и внешние интеграции (VK/PEXELS/API)."
                                 )
                                 logger.warning(f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. Причина: {e}")
                                 self._published_today.add(slot_key)  # stop retrying
@@ -230,12 +230,12 @@ class ContentScheduler:
                             if retries >= MAX_CATCH_UP_RETRIES:
                                 msg = (
                                     f"⚠️ Catch-up: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
-                                    f"AI квота исчерпана (все Gemini ключи + fallback).\n"
-                                    f"Добавь GROQ_API_KEY в env для автоматического резерва."
+                                    f"Причина: {e}\n"
+                                    "Проверь env и внешние интеграции (VK/PEXELS/API)."
                                 )
                                 logger.warning(
                                     f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
-                                    f"SKIPPED для сегодня. AI квота исчерпана."
+                                    f"SKIPPED for today. Reason: {e}"
                                 )
                                 self._published_today.add(slot_key)  # stop retrying
                                 asyncio.create_task(self._notify_admins(msg))
@@ -267,12 +267,18 @@ class ContentScheduler:
                 if not (vk and vk.enabled):
                     logger.info("animal_clip skipped: VK not configured")
                     return False
-                if not getattr(vk, "user_token", ""):
-                    logger.warning("animal_clip: VK_USER_TOKEN is empty; video.save(to_clips=1) may fail")
 
                 import os, json, random, time
                 from src.media_processor import MediaProcessor
                 import aiohttp as _aiohttp
+                pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
+
+                if not pexels_key:
+                    logger.error("animal_clip: PEXELS_API_KEY is empty; cannot fetch videos")
+                    return False
+                if not getattr(vk, "user_token", ""):
+                    logger.error("animal_clip: VK_USER_TOKEN is empty; cannot upload VK Clips")
+                    return False
 
                 # ── Load history of used Pexels video IDs ──────────────────
                 history_path = os.path.join(self.config.media_dir, "..", "data", "clip_history.json")
@@ -298,7 +304,7 @@ class ContentScheduler:
                 keywords = random.choice(animal_pools)
 
                 mp = MediaProcessor(
-                    pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                    pexels_key=pexels_key,
                     media_dir=self.config.media_dir,
                 )
 
@@ -308,6 +314,7 @@ class ContentScheduler:
                     min_duration=5,
                     max_duration=40,
                     exclude_ids=used_ids,
+                    max_pages=4,
                 )
 
                 if not result:
@@ -318,6 +325,18 @@ class ContentScheduler:
                         min_duration=5,
                         max_duration=40,
                         exclude_ids=used_ids,
+                        max_pages=4,
+                    )
+
+                if not result:
+                    # Final fallback: allow repeats to avoid empty slot
+                    logger.info("animal_clip: retry with repeats allowed")
+                    result = await mp.search_pexels_video(
+                        ["cute animals"],
+                        min_duration=5,
+                        max_duration=60,
+                        exclude_ids=[],
+                        max_pages=2,
                     )
 
                 if not result:
@@ -421,12 +440,18 @@ class ContentScheduler:
                 if not (vk and vk.enabled):
                     logger.info("cat_clip skipped: VK not configured")
                     return False
-                if not getattr(vk, "user_token", ""):
-                    logger.warning("cat_clip: VK_USER_TOKEN is empty; video.save(to_clips=1) may fail")
 
                 import os, json, random, time
                 from src.media_processor import MediaProcessor
                 import aiohttp as _aiohttp
+                pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
+
+                if not pexels_key:
+                    logger.error("cat_clip: PEXELS_API_KEY is empty; cannot fetch videos")
+                    return False
+                if not getattr(vk, "user_token", ""):
+                    logger.error("cat_clip: VK_USER_TOKEN is empty; cannot upload VK Clips")
+                    return False
 
                 # ── История просмотренных ID (отдельный файл от animal_clip) ──
                 history_path = os.path.normpath(
@@ -450,7 +475,7 @@ class ContentScheduler:
                 keywords = random.choice(cat_pools)
 
                 mp = MediaProcessor(
-                    pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                    pexels_key=pexels_key,
                     media_dir=self.config.media_dir,
                 )
 
@@ -460,13 +485,25 @@ class ContentScheduler:
                     min_duration=5,
                     max_duration=45,
                     exclude_ids=used_ids,
+                    max_pages=4,
                 )
                 if not result:
                     result = await mp.search_pexels_video(
-                        ["cats"],
+                        ["cats", "kittens"],
                         min_duration=5,
                         max_duration=60,
                         exclude_ids=used_ids,
+                        max_pages=4,
+                    )
+                if not result:
+                    logger.info("cat_clip: retry with repeats allowed")
+                    result = await mp.search_pexels_video(
+                        ["cats", "kittens"],
+                        min_duration=5,
+                        max_duration=90,
+                        min_quality_px=720,
+                        exclude_ids=[],
+                        max_pages=2,
                     )
                 if not result:
                     logger.warning("cat_clip: no video found on Pexels, skipping")
