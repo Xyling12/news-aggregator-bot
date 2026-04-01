@@ -268,6 +268,7 @@ class ContentScheduler:
 
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
+                    slot_max_retries = 4 if rubric in {"animal_clip", "cat_clip"} else MAX_CATCH_UP_RETRIES
                     # Include hour+minute so same rubric at different times fires independently
                     # (e.g. animal_clip 4x/day, cat_clip 2x/day)
                     slot_key = f"{today_str}_{hour:02d}{minute:02d}_{rubric}"
@@ -289,7 +290,7 @@ class ContentScheduler:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
-                            if retries >= MAX_CATCH_UP_RETRIES:
+                            if retries >= slot_max_retries:
                                 msg = (
                                     f"⚠️ Scheduler: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
                                     f"Причина: {e}\n"
@@ -302,9 +303,9 @@ class ContentScheduler:
                     # Catch up: if bot was down and missed a slot (within 30 min window)
                     elif now.hour == hour and now.minute >= minute and now.minute < minute + 30:
                         retries = self._failed_slots.get(slot_key, 0)
-                        if retries >= MAX_CATCH_UP_RETRIES:
+                        if retries >= slot_max_retries:
                             continue  # Already gave up on this slot
-                        logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{MAX_CATCH_UP_RETRIES}]")
+                        logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{slot_max_retries}]")
                         try:
                             ok = await self._publish_rubric(rubric, label)
                             if not ok:
@@ -315,14 +316,14 @@ class ContentScheduler:
                             logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
-                            if retries >= MAX_CATCH_UP_RETRIES:
+                            if retries >= slot_max_retries:
                                 msg = (
                                     f"⚠️ Catch-up: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
                                     f"Причина: {e}\n"
                                     "Проверь env и внешние интеграции (VK/PEXELS/API)."
                                 )
                                 logger.warning(
-                                    f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
+                                    f"⛔ {rubric}: catch-up {retries}/{slot_max_retries} — "
                                     f"SKIPPED for today. Reason: {e}"
                                 )
                                 self._mark_slot_done(today_str, slot_key, persist=False)  # stop retrying
@@ -353,8 +354,7 @@ class ContentScheduler:
                 import src.bot as bot_module
                 vk = getattr(bot_module, '_vk_publisher', None)
                 if not (vk and vk.enabled):
-                    logger.info("animal_clip skipped: VK not configured")
-                    return False
+                    raise RuntimeError("animal_clip: VK not configured")
 
                 import os, json, random, time
                 from src.media_processor import MediaProcessor
@@ -362,11 +362,9 @@ class ContentScheduler:
                 pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
 
                 if not pexels_key:
-                    logger.error("animal_clip: PEXELS_API_KEY is empty; cannot fetch videos")
-                    return False
+                    raise RuntimeError("animal_clip: PEXELS_API_KEY is empty")
                 if not getattr(vk, "user_token", ""):
-                    logger.error("animal_clip: VK_USER_TOKEN is empty; cannot upload VK Clips")
-                    return False
+                    raise RuntimeError("animal_clip: VK_USER_TOKEN is empty")
 
                 # ── Load history of used Pexels video IDs ──────────────────
                 history_path = os.path.join(self.config.media_dir, "..", "data", "clip_history.json")
@@ -428,8 +426,7 @@ class ContentScheduler:
                     )
 
                 if not result:
-                    logger.warning("animal_clip: no HD video found, skipping")
-                    return False
+                    raise RuntimeError("animal_clip: no HD videos found on Pexels")
 
                 pexels_vid_id, v_url = result
 
@@ -466,8 +463,7 @@ class ContentScheduler:
                                 logger.error(f"animal_clip: download failed HTTP {resp.status}")
                                 break
                 if not download_ok:
-                    logger.error("animal_clip: all download attempts failed, skipping")
-                    return False
+                    raise RuntimeError("animal_clip: all download attempts failed")
 
 
                 file_mb = os.path.getsize(tmp_path) / 1024 / 1024
@@ -513,12 +509,11 @@ class ContentScheduler:
                     logger.info(f"✅ VK Animal Clip published (video_id={clip_id}, pexels_id={pexels_vid_id})")
                     return True
                 else:
-                    logger.warning("animal_clip: upload_clip returned None")
-                    return False
+                    raise RuntimeError("animal_clip: upload_clip returned None")
 
             except Exception as e:
                 logger.error(f"animal_clip failed: {e}", exc_info=True)
-            return False
+                raise RuntimeError(f"animal_clip failed: {e}") from e
 
         if rubric == "cat_clip":
             """10:30 и 21:00 — VK Клип только с котиками (Pexels Video)."""
