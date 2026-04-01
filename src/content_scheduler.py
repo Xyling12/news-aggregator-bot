@@ -962,6 +962,8 @@ class ContentScheduler:
                 except Exception:
                     pass
 
+            return True
+
         except Exception as e:
             logger.error(f"Failed to publish {label} to {target}: {e}")
             raise
