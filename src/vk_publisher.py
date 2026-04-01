@@ -66,7 +66,8 @@ class VKPublisher:
 
     def __init__(self, access_token: str, group_id: str, user_token: str = ""):
         self.access_token = access_token
-        self.user_token = user_token  # User token for photo uploads (needs 'photos' scope)
+        self.has_explicit_user_token = bool((user_token or "").strip())
+        self.user_token = (user_token or access_token).strip()
         self.group_id = group_id.replace("club", "")  # Strip "club" prefix if present
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -619,21 +620,22 @@ class VKPublisher:
         if file_size > 256 * 1024 * 1024:  # 256 MB VK limit
             logger.error(f"Clip video too large: {file_size / 1024 / 1024:.1f} MB (max 256 MB)")
             return None
-        if not self.user_token:
-            logger.error("VK Clip upload skipped: VK_USER_TOKEN is empty")
-            return None
-
         # Step 1: Save video object — get upload server URL
         save_params: dict = {
             "group_id": int(self.group_id),
             "name": caption[:128] if caption else "Клип",
             "description": caption[:4096] if caption else "",
             "is_private": 0,
-            "wallpost": 0,        # We'll post to wall manually if needed
+            "wallpost": 0,
             "repeat": 0,
-            "to_clips": 1,        # ← публикует в VK Клипы (Shorts/Reels раздел)
-            "_token_override": self.user_token, # REQUIRED: Only user tokens can upload clips
         }
+        if self.has_explicit_user_token:
+            save_params["to_clips"] = 1
+            save_params["_token_override"] = self.user_token
+        else:
+            # Fallback: if VK_USER_TOKEN is not configured, publish as regular video.
+            save_params["wallpost"] = 1
+            logger.warning("VK Clip upload: VK_USER_TOKEN is empty, fallback to regular VK video mode")
         if link_url:
             save_params["link"] = link_url
 
@@ -665,7 +667,12 @@ class VKPublisher:
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=120),  # large files need more time
             ) as resp:
-                upload_result = await resp.json()
+                upload_result = await resp.json(content_type=None)
+                if resp.status != 200:
+                    logger.error(
+                        f"VK Clip upload HTTP {resp.status}: {str(upload_result)[:200]}"
+                    )
+                    return None
 
             logger.debug(f"VK Clip upload response: {upload_result}")
 
