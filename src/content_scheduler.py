@@ -270,8 +270,8 @@ class ContentScheduler:
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
                     is_clip_slot = rubric in {"animal_clip", "cat_clip"}
-                    slot_max_retries = 8 if is_clip_slot else MAX_CATCH_UP_RETRIES
-                    slot_catchup_minutes = 60 if is_clip_slot else 30
+                    slot_max_retries = 1000 if is_clip_slot else MAX_CATCH_UP_RETRIES
+                    slot_catchup_minutes = 180 if is_clip_slot else 30
                     slot_start_minutes = hour * 60 + minute
                     # Include hour+minute so same rubric at different times fires independently
                     # (e.g. animal_clip 4x/day, cat_clip 2x/day)
@@ -294,7 +294,7 @@ class ContentScheduler:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
-                            if retries >= slot_max_retries:
+                            if (not is_clip_slot) and retries >= slot_max_retries:
                                 msg = (
                                     f"⚠️ Scheduler: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
                                     f"Причина: {e}\n"
@@ -307,7 +307,7 @@ class ContentScheduler:
                     # Catch up: if bot was down and missed a slot
                     elif slot_start_minutes <= now_total_minutes < slot_start_minutes + slot_catchup_minutes:
                         retries = self._failed_slots.get(slot_key, 0)
-                        if retries >= slot_max_retries:
+                        if (not is_clip_slot) and retries >= slot_max_retries:
                             continue  # Already gave up on this slot
                         logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{slot_max_retries}]")
                         try:
@@ -320,7 +320,7 @@ class ContentScheduler:
                             logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
-                            if retries >= slot_max_retries:
+                            if (not is_clip_slot) and retries >= slot_max_retries:
                                 msg = (
                                     f"⚠️ Catch-up: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
                                     f"Причина: {e}\n"
