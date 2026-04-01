@@ -272,7 +272,7 @@ def detect_rubric(text: str):
     text_lower = " ".join(body_lines).lower()
     for label, hashtag, keywords in RUBRIC_MAP:
         if any(kw in text_lower for kw in keywords):
-            return label, hashtag
+            return label.upper(), hashtag
     return None, None
 
 
@@ -306,13 +306,29 @@ def format_post(text: str, hashtags: list) -> str:
         parts.append(body)
         parts.append("")
 
-    # Hashtags: only rubric tag + fixed city tags (no noisy AI tags)
+    # Hashtags: user tags + rubric tag + fixed city tags (case-insensitive dedup)
     all_tags = []
+    seen_tags = set()
+
+    def _append_tag(tag: str) -> None:
+        clean = (tag or "").strip()
+        if not clean:
+            return
+        if not clean.startswith("#"):
+            clean = f"#{clean.lstrip('#')}"
+        dedup_key = clean.lower()
+        if dedup_key in seen_tags:
+            return
+        seen_tags.add(dedup_key)
+        all_tags.append(clean)
+
+    for tag in hashtags or []:
+        _append_tag(tag)
+
     if rubric_hashtag:
-        all_tags.append(rubric_hashtag)
+        _append_tag(rubric_hashtag)
     for city_tag in ["#Ижевск", "#Удмуртия", "#ИжевскСегодня"]:
-        if city_tag not in all_tags:
-            all_tags.append(city_tag)
+        _append_tag(city_tag)
     if all_tags:
         parts.append("─ ─ ─ ─ ─")
         parts.append(" ".join(all_tags))
