@@ -268,7 +268,9 @@ class ContentScheduler:
 
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
-                    slot_max_retries = 4 if rubric in {"animal_clip", "cat_clip"} else MAX_CATCH_UP_RETRIES
+                    is_clip_slot = rubric in {"animal_clip", "cat_clip"}
+                    slot_max_retries = 8 if is_clip_slot else MAX_CATCH_UP_RETRIES
+                    slot_catchup_minutes = 60 if is_clip_slot else 30
                     # Include hour+minute so same rubric at different times fires independently
                     # (e.g. animal_clip 4x/day, cat_clip 2x/day)
                     slot_key = f"{today_str}_{hour:02d}{minute:02d}_{rubric}"
@@ -300,8 +302,8 @@ class ContentScheduler:
                                 self._mark_slot_done(today_str, slot_key, persist=False)  # stop retrying
                                 asyncio.create_task(self._notify_admins(msg))
 
-                    # Catch up: if bot was down and missed a slot (within 30 min window)
-                    elif now.hour == hour and now.minute >= minute and now.minute < minute + 30:
+                    # Catch up: if bot was down and missed a slot
+                    elif now.hour == hour and now.minute >= minute and now.minute < minute + slot_catchup_minutes:
                         retries = self._failed_slots.get(slot_key, 0)
                         if retries >= slot_max_retries:
                             continue  # Already gave up on this slot
