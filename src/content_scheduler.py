@@ -250,6 +250,7 @@ class ContentScheduler:
             try:
                 now = self._now()
                 today_str = now.strftime("%Y-%m-%d")
+                now_total_minutes = now.hour * 60 + now.minute
 
                 # Reset published list at midnight
                 if self._last_date != today_str:
@@ -271,6 +272,7 @@ class ContentScheduler:
                     is_clip_slot = rubric in {"animal_clip", "cat_clip"}
                     slot_max_retries = 8 if is_clip_slot else MAX_CATCH_UP_RETRIES
                     slot_catchup_minutes = 60 if is_clip_slot else 30
+                    slot_start_minutes = hour * 60 + minute
                     # Include hour+minute so same rubric at different times fires independently
                     # (e.g. animal_clip 4x/day, cat_clip 2x/day)
                     slot_key = f"{today_str}_{hour:02d}{minute:02d}_{rubric}"
@@ -280,7 +282,7 @@ class ContentScheduler:
                         continue
 
                     # Is it time? (within a 2-minute window)
-                    if now.hour == hour and now.minute >= minute and now.minute < minute + 2:
+                    if slot_start_minutes <= now_total_minutes < slot_start_minutes + 2:
                         logger.info(f"⏰ Time to publish: {label} ({rubric})")
                         try:
                             ok = await self._publish_rubric(rubric, label)
@@ -303,7 +305,7 @@ class ContentScheduler:
                                 asyncio.create_task(self._notify_admins(msg))
 
                     # Catch up: if bot was down and missed a slot
-                    elif now.hour == hour and now.minute >= minute and now.minute < minute + slot_catchup_minutes:
+                    elif slot_start_minutes <= now_total_minutes < slot_start_minutes + slot_catchup_minutes:
                         retries = self._failed_slots.get(slot_key, 0)
                         if retries >= slot_max_retries:
                             continue  # Already gave up on this slot
