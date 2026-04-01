@@ -367,8 +367,10 @@ class ContentScheduler:
 
                 if not pexels_key:
                     raise RuntimeError("animal_clip: PEXELS_API_KEY is empty")
-                if not getattr(vk, "user_token", ""):
-                    raise RuntimeError("animal_clip: VK_USER_TOKEN is empty")
+                if not getattr(vk, "has_explicit_user_token", False):
+                    logger.warning(
+                        "animal_clip: VK_USER_TOKEN is empty; upload_clip will fallback to regular VK video mode"
+                    )
 
                 # ── Load history of used Pexels video IDs ──────────────────
                 history_path = os.path.join(self.config.media_dir, "..", "data", "clip_history.json")
@@ -534,11 +536,11 @@ class ContentScheduler:
                 pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
 
                 if not pexels_key:
-                    logger.error("cat_clip: PEXELS_API_KEY is empty; cannot fetch videos")
-                    return False
-                if not getattr(vk, "user_token", ""):
-                    logger.error("cat_clip: VK_USER_TOKEN is empty; cannot upload VK Clips")
-                    return False
+                    raise RuntimeError("cat_clip: PEXELS_API_KEY is empty")
+                if not getattr(vk, "has_explicit_user_token", False):
+                    logger.warning(
+                        "cat_clip: VK_USER_TOKEN is empty; upload_clip will fallback to regular VK video mode"
+                    )
 
                 # ── История просмотренных ID (отдельный файл от animal_clip) ──
                 history_path = os.path.normpath(
@@ -593,8 +595,7 @@ class ContentScheduler:
                         max_pages=2,
                     )
                 if not result:
-                    logger.warning("cat_clip: no video found on Pexels, skipping")
-                    return False
+                    raise RuntimeError("cat_clip: no video found on Pexels")
 
                 pexels_vid_id, v_url = result
 
@@ -631,8 +632,7 @@ class ContentScheduler:
                                 logger.error(f"cat_clip: download failed HTTP {resp.status}")
                                 break
                 if not download_ok:
-                    logger.error("cat_clip: all download attempts failed, skipping")
-                    return False
+                    raise RuntimeError("cat_clip: all download attempts failed")
 
                 file_mb = os.path.getsize(tmp_path) / 1024 / 1024
                 logger.info(f"cat_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
@@ -674,12 +674,11 @@ class ContentScheduler:
                     logger.info(f"✅ VK Cat Clip published (video_id={clip_id}, pexels_id={pexels_vid_id})")
                     return True
                 else:
-                    logger.warning("cat_clip: upload_clip returned None")
-                    return False
+                    raise RuntimeError("cat_clip: upload_clip returned None")
 
             except Exception as e:
                 logger.error(f"cat_clip failed: {e}", exc_info=True)
-            return False
+                raise RuntimeError(f"cat_clip failed: {e}") from e
 
         if rubric == "cat_story":
             try:
