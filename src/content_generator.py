@@ -666,6 +666,15 @@ class ContentGenerator:
             wind=wind, humidity=humidity, pressure=pressure, date=date_str,
         )
         text = await self._ask_ai(prompt, temperature=0.5)
+        if not text:
+            # Hard fallback: publish weather from real API data even if AI is down.
+            text = (
+                f"🌤 Ижевск, {date_str}\n"
+                f"Сейчас {temp}°C (ощущается как {feels_like}°C), {description}.\n"
+                f"Ветер {wind} м/с, влажность {humidity}%, давление {pressure} мм рт. ст.\n"
+                "Одевайтесь по погоде и берегите себя."
+            )
+            logger.warning("Weather text fallback used: AI unavailable")
         if text:
             text += "\n\n─ ─ ─ ─ ─\n#погода #ижевск"
             text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
