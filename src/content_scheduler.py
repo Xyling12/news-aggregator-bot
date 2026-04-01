@@ -55,6 +55,7 @@ DEFAULT_SCHEDULE = [
 
 # How many days to remember a photo URL to avoid repeats
 _PHOTO_DEDUP_DAYS = 30
+_SLOT_DEDUP_DAYS = 7
 
 
 class ContentScheduler:
@@ -89,6 +90,10 @@ class ContentScheduler:
     def _photo_history_path(self) -> str:
         import os
         return os.path.join(self.config.media_dir, "..", "data", "photo_url_history.json")
+
+    def _published_slots_path(self) -> str:
+        import os
+        return os.path.join(self.config.media_dir, "..", "data", "published_slots.json")
 
     def _load_photo_history(self) -> set:
         """Load used photo URLs from disk; prune entries older than _PHOTO_DEDUP_DAYS."""
@@ -126,6 +131,86 @@ class ContentScheduler:
                 json.dump(data, f)
         except Exception as e:
             logger.warning(f"Failed to save photo history: {e}")
+
+    def _load_published_slots(self, today_str: str) -> set[str]:
+        """Load already-published slot keys for today from disk and prune old days."""
+        import json, os
+        path = os.path.normpath(self._published_slots_path())
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                return set()
+        except (FileNotFoundError, json.JSONDecodeError):
+            return set()
+        except Exception as e:
+            logger.warning(f"Failed to load published slot history: {e}")
+            return set()
+
+        cutoff = (self._now().date() - timedelta(days=_SLOT_DEDUP_DAYS)).isoformat()
+        cleaned: dict[str, list[str]] = {}
+        for day, slots in raw.items():
+            if not isinstance(day, str) or day < cutoff:
+                continue
+            if not isinstance(slots, list):
+                continue
+            valid_slots = [slot for slot in slots if isinstance(slot, str)]
+            if valid_slots:
+                cleaned[day] = valid_slots
+
+        if cleaned != raw:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(cleaned, f, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"Failed to rewrite pruned slot history: {e}")
+
+        return set(cleaned.get(today_str, []))
+
+    def _save_published_slots(self, today_str: str) -> None:
+        """Persist today's published slot keys to disk."""
+        import json, os
+        path = os.path.normpath(self._published_slots_path())
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raw = {}
+        except (FileNotFoundError, json.JSONDecodeError):
+            raw = {}
+        except Exception as e:
+            logger.warning(f"Failed to read slot history before save: {e}")
+            raw = {}
+
+        cutoff = (self._now().date() - timedelta(days=_SLOT_DEDUP_DAYS)).isoformat()
+        cleaned: dict[str, list[str]] = {}
+        for day, slots in raw.items():
+            if not isinstance(day, str) or day < cutoff:
+                continue
+            if isinstance(slots, list):
+                valid_slots = [slot for slot in slots if isinstance(slot, str)]
+                if valid_slots:
+                    cleaned[day] = valid_slots
+
+        if self._published_today:
+            cleaned[today_str] = sorted(self._published_today)
+        else:
+            cleaned.pop(today_str, None)
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cleaned, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to save published slot history: {e}")
+
+    def _mark_slot_done(self, today_str: str, slot_key: str, persist: bool = True) -> None:
+        """Mark slot as done for today; optionally persist to survive restarts."""
+        self._published_today.add(slot_key)
+        if persist:
+            self._save_published_slots(today_str)
 
     async def start(self):
         """Start the content scheduler loop."""
@@ -168,12 +253,15 @@ class ContentScheduler:
 
                 # Reset published list at midnight
                 if self._last_date != today_str:
-                    self._published_today.clear()
+                    self._published_today = self._load_published_slots(today_str)
                     self._failed_slots.clear()
                     # Reload photo history from disk (do NOT clear — dedup is persistent)
                     self._used_photo_urls = self._load_photo_history()
                     self._last_date = today_str
-                    logger.info(f"New day: {today_str}, schedule reset")
+                    logger.info(
+                        f"New day: {today_str}, schedule reset "
+                        f"(restored slots: {len(self._published_today)})"
+                    )
 
                 # Max retries for a single slot before giving up for today
                 MAX_CATCH_UP_RETRIES = 2
@@ -195,7 +283,7 @@ class ContentScheduler:
                             ok = await self._publish_rubric(rubric, label)
                             if not ok:
                                 raise RuntimeError(f"{rubric} returned False (nothing published)")
-                            self._published_today.add(slot_key)
+                            self._mark_slot_done(today_str, slot_key, persist=True)
                             self._failed_slots.pop(slot_key, None)  # clear on success
                         except Exception as e:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
@@ -208,7 +296,7 @@ class ContentScheduler:
                                     "Проверь env и внешние интеграции (VK/PEXELS/API)."
                                 )
                                 logger.warning(f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. Причина: {e}")
-                                self._published_today.add(slot_key)  # stop retrying
+                                self._mark_slot_done(today_str, slot_key, persist=False)  # stop retrying
                                 asyncio.create_task(self._notify_admins(msg))
 
                     # Catch up: if bot was down and missed a slot (within 30 min window)
@@ -221,7 +309,7 @@ class ContentScheduler:
                             ok = await self._publish_rubric(rubric, label)
                             if not ok:
                                 raise RuntimeError(f"{rubric} returned False (nothing published)")
-                            self._published_today.add(slot_key)
+                            self._mark_slot_done(today_str, slot_key, persist=True)
                             self._failed_slots.pop(slot_key, None)
                         except Exception as e:
                             logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
@@ -237,7 +325,7 @@ class ContentScheduler:
                                     f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
                                     f"SKIPPED for today. Reason: {e}"
                                 )
-                                self._published_today.add(slot_key)  # stop retrying
+                                self._mark_slot_done(today_str, slot_key, persist=False)  # stop retrying
                                 asyncio.create_task(self._notify_admins(msg))
 
                 await asyncio.sleep(30)  # Check every 30 seconds
