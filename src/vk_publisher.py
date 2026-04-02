@@ -683,9 +683,31 @@ class VKPublisher:
             logger.error(f"VK Clip upload error: {type(e).__name__}: {e}")
             return None
 
-        # Step 3: VK automatically processes and publishes the clip when `to_clips=1`.
-        # DO NOT call `wall.post` manually with the clip attachment — it will cause False/Error 100.
+        # Step 3:
+        # - real VK Clips (`to_clips=1`) are left for VK processing;
+        # - fallback regular videos are explicitly posted to the wall so they become visible in the community feed.
         if video_id and owner_id:
+            if not self.has_explicit_user_token:
+                attachment = f"video{owner_id}_{video_id}"
+                wall_params = {
+                    "owner_id": -int(self.group_id),
+                    "from_group": 1,
+                    "message": caption[:4096] if caption else "",
+                    "attachments": attachment,
+                }
+                for attempt in range(5):
+                    if attempt:
+                        await asyncio.sleep(12)
+                    wall_result = await self._api_call("wall.post", **wall_params)
+                    if wall_result and "post_id" in wall_result:
+                        logger.info(
+                            f"✅ VK fallback video published to wall: vk.com/wall-{self.group_id}_{wall_result['post_id']} "
+                            f"(video {attachment})"
+                        )
+                        return video_id
+                logger.warning(f"VK fallback video uploaded but wall.post failed for {attachment}")
+                return video_id
+
             logger.info(f"✅ VK Clip uploaded successfully (video_id={video_id}) and sent to processing.")
             return video_id
 
