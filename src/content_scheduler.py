@@ -401,7 +401,7 @@ class ContentScheduler:
                 )
 
                 logger.info(f"animal_clip: searching Pexels HD videos for {keywords} (excluding {len(used_ids)} used)")
-                result = await mp.search_pexels_video(
+                result = await mp.search_pexels_video_candidate(
                     keywords,
                     min_duration=5,
                     max_duration=40,
@@ -412,7 +412,7 @@ class ContentScheduler:
                 if not result:
                     # Try generic fallback if specific query failed
                     logger.info("animal_clip: retry with generic 'cute animals'")
-                    result = await mp.search_pexels_video(
+                    result = await mp.search_pexels_video_candidate(
                         ["cute animals"],
                         min_duration=5,
                         max_duration=40,
@@ -423,7 +423,7 @@ class ContentScheduler:
                 if not result:
                     # Final fallback: allow repeats to avoid empty slot
                     logger.info("animal_clip: retry with repeats allowed")
-                    result = await mp.search_pexels_video(
+                    result = await mp.search_pexels_video_candidate(
                         ["cute animals"],
                         min_duration=5,
                         max_duration=60,
@@ -434,7 +434,8 @@ class ContentScheduler:
                 if not result:
                     raise RuntimeError("animal_clip: no HD videos found on Pexels")
 
-                pexels_vid_id, v_url = result
+                pexels_vid_id = result["id"]
+                url_candidates = list(result.get("urls") or ([result.get("url")] if result.get("url") else []))
 
                 # ── Download video with retry on 403 ─────────────────────────
                 tmp_path = os.path.join(
@@ -450,24 +451,33 @@ class ContentScheduler:
                 download_ok = False
                 for _dl_try in range(3):
                     async with _aiohttp.ClientSession(headers=dl_headers) as sess:
-                        async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
-                            if resp.status == 200:
-                                with open(tmp_path, "wb") as f:
-                                    f.write(await resp.read())
-                                download_ok = True
-                                break
-                            elif resp.status in (403, 404):
-                                logger.warning(f"animal_clip: video {resp.status} id={pexels_vid_id}, trying next video")
-                                used_ids.append(pexels_vid_id)
-                                retry_result = await mp.search_pexels_video(
-                                    keywords, min_duration=5, max_duration=40, exclude_ids=used_ids
-                                )
-                                if not retry_result:
+                        for v_url in url_candidates:
+                            async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
+                                if resp.status == 200:
+                                    with open(tmp_path, "wb") as f:
+                                        f.write(await resp.read())
+                                    download_ok = True
                                     break
-                                pexels_vid_id, v_url = retry_result
-                            else:
-                                logger.error(f"animal_clip: download failed HTTP {resp.status}")
-                                break
+                                elif resp.status in (403, 404):
+                                    logger.warning(
+                                        f"animal_clip: video file {resp.status} id={pexels_vid_id}, trying alternative url"
+                                    )
+                                    continue
+                                else:
+                                    logger.error(f"animal_clip: download failed HTTP {resp.status}")
+                                    break
+                        if download_ok:
+                            break
+                        used_ids.append(pexels_vid_id)
+                        retry_result = await mp.search_pexels_video_candidate(
+                            keywords, min_duration=5, max_duration=40, exclude_ids=used_ids
+                        )
+                        if not retry_result:
+                            break
+                        pexels_vid_id = retry_result["id"]
+                        url_candidates = list(
+                            retry_result.get("urls") or ([retry_result.get("url")] if retry_result.get("url") else [])
+                        )
                 if not download_ok:
                     raise RuntimeError("animal_clip: all download attempts failed")
 
@@ -569,7 +579,7 @@ class ContentScheduler:
                 )
 
                 logger.info(f"cat_clip: searching Pexels for {keywords} (excluding {len(used_ids)} used)")
-                result = await mp.search_pexels_video(
+                result = await mp.search_pexels_video_candidate(
                     keywords,
                     min_duration=5,
                     max_duration=45,
@@ -577,7 +587,7 @@ class ContentScheduler:
                     max_pages=4,
                 )
                 if not result:
-                    result = await mp.search_pexels_video(
+                    result = await mp.search_pexels_video_candidate(
                         ["cats", "kittens"],
                         min_duration=5,
                         max_duration=60,
@@ -586,7 +596,7 @@ class ContentScheduler:
                     )
                 if not result:
                     logger.info("cat_clip: retry with repeats allowed")
-                    result = await mp.search_pexels_video(
+                    result = await mp.search_pexels_video_candidate(
                         ["cats", "kittens"],
                         min_duration=5,
                         max_duration=90,
@@ -597,7 +607,8 @@ class ContentScheduler:
                 if not result:
                     raise RuntimeError("cat_clip: no video found on Pexels")
 
-                pexels_vid_id, v_url = result
+                pexels_vid_id = result["id"]
+                url_candidates = list(result.get("urls") or ([result.get("url")] if result.get("url") else []))
 
                 # ── Скачиваем видео с retry на 403 ───────────────────────────
                 tmp_path = os.path.join(
@@ -613,24 +624,33 @@ class ContentScheduler:
                 download_ok = False
                 for _dl_try in range(3):
                     async with _aiohttp.ClientSession(headers=dl_headers) as sess:
-                        async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
-                            if resp.status == 200:
-                                with open(tmp_path, "wb") as f:
-                                    f.write(await resp.read())
-                                download_ok = True
-                                break
-                            elif resp.status in (403, 404):
-                                logger.warning(f"cat_clip: video {resp.status} id={pexels_vid_id}, trying next video")
-                                used_ids.append(pexels_vid_id)
-                                retry_result = await mp.search_pexels_video(
-                                    keywords, min_duration=5, max_duration=45, exclude_ids=used_ids
-                                )
-                                if not retry_result:
+                        for v_url in url_candidates:
+                            async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
+                                if resp.status == 200:
+                                    with open(tmp_path, "wb") as f:
+                                        f.write(await resp.read())
+                                    download_ok = True
                                     break
-                                pexels_vid_id, v_url = retry_result
-                            else:
-                                logger.error(f"cat_clip: download failed HTTP {resp.status}")
-                                break
+                                elif resp.status in (403, 404):
+                                    logger.warning(
+                                        f"cat_clip: video file {resp.status} id={pexels_vid_id}, trying alternative url"
+                                    )
+                                    continue
+                                else:
+                                    logger.error(f"cat_clip: download failed HTTP {resp.status}")
+                                    break
+                        if download_ok:
+                            break
+                        used_ids.append(pexels_vid_id)
+                        retry_result = await mp.search_pexels_video_candidate(
+                            keywords, min_duration=5, max_duration=45, exclude_ids=used_ids
+                        )
+                        if not retry_result:
+                            break
+                        pexels_vid_id = retry_result["id"]
+                        url_candidates = list(
+                            retry_result.get("urls") or ([retry_result.get("url")] if retry_result.get("url") else [])
+                        )
                 if not download_ok:
                     raise RuntimeError("cat_clip: all download attempts failed")
 
@@ -728,7 +748,10 @@ class ContentScheduler:
                         pexels_key=os.getenv("PEXELS_API_KEY", ""),
                         media_dir=self.config.media_dir,
                     )
-                    v_url = await mp.search_pexels_video(["Izhevsk", "nature", "city"], min_duration=5, max_duration=15)
+                    video_candidate = await mp.search_pexels_video_candidate(
+                        ["Izhevsk", "nature", "city"], min_duration=5, max_duration=15
+                    )
+                    v_url = video_candidate["url"] if video_candidate else None
                     
                     if v_url:
                         vid_path = await self.story_generator.generate_video_story(v_url, short_text)

@@ -451,6 +451,29 @@ class MediaProcessor:
         max_pages: int = 3,
         allow_repeat_fallback: bool = True,
     ) -> Optional[tuple]:
+        candidate = await self.search_pexels_video_candidate(
+            keywords,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            min_quality_px=min_quality_px,
+            exclude_ids=exclude_ids,
+            max_pages=max_pages,
+            allow_repeat_fallback=allow_repeat_fallback,
+        )
+        if not candidate:
+            return None
+        return (candidate["id"], candidate["url"])
+
+    async def search_pexels_video_candidate(
+        self,
+        keywords: List[str],
+        min_duration: int = 5,
+        max_duration: int = 30,
+        min_quality_px: int = 1080,
+        exclude_ids: Optional[List[int]] = None,
+        max_pages: int = 3,
+        allow_repeat_fallback: bool = True,
+    ) -> Optional[dict]:
         """Search Pexels for short portrait videos. Requires PEXELS_API_KEY.
 
         Quality filtering:
@@ -458,7 +481,7 @@ class MediaProcessor:
           - Sorts candidates by pixel count (width × height) — highest quality first
           - Skips quality tags: 'sd', '360', '240' in file quality field
 
-        Returns (video_id, mp4_url) tuple, or None if nothing found.
+        Returns {"id": video_id, "url": best_url, "urls": [fallbacks...]} or None.
         """
         if not self.pexels_key:
             logger.debug("Pexels Video: no API key configured, skipping")
@@ -533,23 +556,49 @@ class MediaProcessor:
         import random
         random.shuffle(videos)
 
-        def _best_hd_file(files: list) -> Optional[str]:
-            """Return URL of the best HD file, or None if nothing meets threshold."""
+        def _ranked_hd_links(files: list) -> List[str]:
+            """Return ranked MP4 URLs for one Pexels video, best candidate first."""
             _bad_quality = {"sd", "360p", "240p"}
             hd_files = [
                 f for f in files
-                if max(f.get("width", 0), f.get("height", 0)) >= min_quality_px
+                if (f.get("link") or "")
+                and max(f.get("width", 0), f.get("height", 0)) >= min_quality_px
                 and f.get("quality", "").lower() not in _bad_quality
             ]
             if not hd_files:
-                return None
+                return []
+
+            def _sort_key(f: dict) -> tuple:
+                width = int(f.get("width", 0) or 0)
+                height = int(f.get("height", 0) or 0)
+                longer = max(width, height)
+                quality = (f.get("quality") or "").lower()
+                file_type = (f.get("file_type") or "").lower()
+                link = (f.get("link") or "").lower()
+                return (
+                    1 if file_type == "video/mp4" or ".mp4" in link else 0,
+                    1 if quality == "hd" else 0,
+                    1 if longer <= 1920 else 0,
+                    1 if height >= width else 0,
+                    -abs(longer - 1280),
+                    width * height,
+                )
+
             hd_files.sort(
-                key=lambda f: f.get("width", 0) * f.get("height", 0),
+                key=_sort_key,
                 reverse=True,
             )
-            return hd_files[0].get("link")
+            links = []
+            seen = set()
+            for file_info in hd_files:
+                link = (file_info.get("link") or "").strip()
+                if not link or link in seen:
+                    continue
+                seen.add(link)
+                links.append(link)
+            return links
 
-        def _pick_video(ignore_exclude: bool = False) -> Optional[tuple]:
+        def _pick_video(ignore_exclude: bool = False) -> Optional[dict]:
             # Pass 1: duration filter + HD
             for vid in videos:
                 vid_id = vid.get("id")
@@ -557,23 +606,28 @@ class MediaProcessor:
                     continue
                 duration = vid.get("duration", 0)
                 if min_duration <= duration <= max_duration:
-                    url = _best_hd_file(vid.get("video_files", []))
-                    if url:
+                    urls = _ranked_hd_links(vid.get("video_files", []))
+                    if urls:
                         logger.info(
                             f"Pexels Video: selected id={vid_id} "
                             f"duration={duration}s quality=HD query='{query}'"
                         )
-                        return (vid_id, url)
+                        return {"id": vid_id, "url": urls[0], "urls": urls, "duration": duration}
 
             # Pass 2: relax duration, still require HD
             for vid in videos:
                 vid_id = vid.get("id")
                 if not ignore_exclude and vid_id in exclude_ids:
                     continue
-                url = _best_hd_file(vid.get("video_files", []))
-                if url:
+                urls = _ranked_hd_links(vid.get("video_files", []))
+                if urls:
                     logger.info(f"Pexels Video: relaxed-duration id={vid_id} query='{query}'")
-                    return (vid_id, url)
+                    return {
+                        "id": vid_id,
+                        "url": urls[0],
+                        "urls": urls,
+                        "duration": vid.get("duration", 0),
+                    }
             return None
 
         selected = _pick_video(ignore_exclude=False)
