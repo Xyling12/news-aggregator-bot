@@ -199,13 +199,17 @@ class VKPublisher:
         scan_limit: int = 6,
         skip_post_keys: Optional[set[str]] = None,
     ) -> Optional[dict]:
+        if not self.has_explicit_user_token:
+            logger.info("VK outreach scan skipped: VK_USER_TOKEN is not configured")
+            return None
+
         skip = skip_post_keys or set()
         normalized_keywords = [k.lower().strip() for k in keywords if k.strip()]
 
         for raw_target in targets:
             params = self._normalize_wall_target(raw_target)
             params.update({"count": max(3, min(20, scan_limit)), "filter": "owner"})
-            wall = await self._api_call("wall.get", **params)
+            wall = await self._api_call("wall.get", _token_override=self.user_token, **params)
             if not wall or "items" not in wall:
                 continue
 
@@ -275,13 +279,22 @@ class VKPublisher:
                     error_code = error.get("error_code")
                     error_msg = error.get("error_msg", "unknown")
                     # Provide actionable context based on known VK error codes
-                    hint = {
-                        5:  "Invalid access token — check VK_TOKEN",
-                        15: "Access denied — check group admin rights",
-                        27: "Group token cannot upload photos — use a user token with 'photos' scope (text posts still work)",
-                        100: "Invalid parameter passed to VK API",
-                        214: "Post rejected by VK moderation",
-                    }.get(error_code, "")
+                    if error_code == 27:
+                        if method.startswith("photos."):
+                            hint = "Method requires a user token with 'photos' scope"
+                        elif method.startswith("stories."):
+                            hint = "Method requires a user token with 'stories' scope"
+                        elif method in {"wall.get", "wall.createComment"}:
+                            hint = "This VK outreach action requires VK_USER_TOKEN"
+                        else:
+                            hint = "This method requires a user token instead of a group token"
+                    else:
+                        hint = {
+                            5:  "Invalid access token - check VK_TOKEN",
+                            15: "Access denied - check group admin rights",
+                            100: "Invalid parameter passed to VK API",
+                            214: "Post rejected by VK moderation",
+                        }.get(error_code, "")
                     logger.error(
                         f"VK API error [{method}] code={error_code} msg='{error_msg}'"
                         + (f" | hint: {hint}" if hint else "")
@@ -727,12 +740,16 @@ class VKPublisher:
         """
         if not post_id or not message:
             return None
-            
+        if not self.has_explicit_user_token:
+            logger.info("VK comment skipped: VK_USER_TOKEN is not configured")
+            return None
+             
         params = {
             "owner_id": owner_id if owner_id is not None else -int(self.group_id),
             "post_id": post_id,
             "from_group": int(self.group_id),
             "message": message,
+            "_token_override": self.user_token,
         }
         result = await self._api_call("wall.createComment", **params)
         if result and "comment_id" in result:

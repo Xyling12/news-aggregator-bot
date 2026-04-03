@@ -1482,6 +1482,8 @@ async def _maybe_comment_competitor_post() -> None:
         return
     if not _config.vk_competitor_commenting_enabled:
         return
+    if not getattr(_vk_publisher, "has_explicit_user_token", False):
+        return
 
     targets_raw = [x.strip() for x in _config.vk_competitor_targets if x.strip()]
     targets: list[tuple[str, str]] = []
