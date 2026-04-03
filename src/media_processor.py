@@ -563,7 +563,7 @@ class MediaProcessor:
                 f for f in files
                 if (f.get("link") or "")
                 and max(f.get("width", 0), f.get("height", 0)) >= min_quality_px
-                and f.get("quality", "").lower() not in _bad_quality
+                and (f.get("quality") or "").lower() not in _bad_quality
             ]
             if not hd_files:
                 return []
