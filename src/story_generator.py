@@ -598,25 +598,30 @@ class StoryGenerator:
 
     async def generate_video_story(self, video_url: str, text: str, output_path: str = "story_temp.mp4", music_url: Optional[str] = None) -> Optional[str]:
         """
-        Generate a 1080x1920 MP4 story from a source video URL.
-        Downloads the video, crops to 9:16, darkens it, adds text overlay, and limits to 15 seconds.
+        Generate a 1080x1920 MP4 story from a source video URL or local path.
+        Downloads the video (if URL), crops to 9:16, darkens it, adds text overlay, and limits to 15 seconds.
         Returns the path to the generated MP4, or None on failure.
         """
         import tempfile
         import ffmpeg
+        import os
         
         try:
-            # 1. Download source video
-            input_mp4 = tempfile.mktemp(suffix=".mp4")
-            headers = {"User-Agent": "IzhevskTodayNewsBot/1.0"}
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(video_url, timeout=30) as resp:
-                    if resp.status == 200:
-                        with open(input_mp4, 'wb') as f:
-                            f.write(await resp.read())
-                    else:
-                        logger.error(f"Failed to download video: {resp.status}")
-                        return None
+            # 1. Download source video or use local path
+            is_local = os.path.exists(video_url)
+            if is_local:
+                input_mp4 = video_url
+            else:
+                input_mp4 = tempfile.mktemp(suffix=".mp4")
+                headers = {"User-Agent": "IzhevskTodayNewsBot/1.0"}
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(video_url, timeout=30) as resp:
+                        if resp.status == 200:
+                            with open(input_mp4, 'wb') as f:
+                                f.write(await resp.read())
+                        else:
+                            logger.error(f"Failed to download video: {resp.status}")
+                            return None
 
             # 2. Process with ffmpeg
             # We need to scale/crop to exactly 1080x1920.
@@ -676,9 +681,10 @@ class StoryGenerator:
                 lambda: ffmpeg.run(_out, overwrite_output=True, capture_stdout=True, capture_stderr=True)
             )
             
-            # Cleanup temp input
+            # Cleanup temp input if we downloaded it
             try:
-                os.remove(input_mp4)
+                if not is_local:
+                    os.remove(input_mp4)
             except:
                 pass
                 
