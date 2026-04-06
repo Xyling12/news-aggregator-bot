@@ -295,7 +295,11 @@ class VKPublisher:
                             100: "Invalid parameter passed to VK API",
                             214: "Post rejected by VK moderation",
                         }.get(error_code, "")
-                    logger.error(
+                    log_level = logger.error
+                    if method == "wall.createComment" and error_code == 15:
+                        log_level = logger.warning
+
+                    log_level(
                         f"VK API error [{method}] code={error_code} msg='{error_msg}'"
                         + (f" | hint: {hint}" if hint else "")
                     )
@@ -756,7 +760,7 @@ class VKPublisher:
             logger.info(f"✅ First comment added to post {post_id}: {message[:40]}...")
             return result["comment_id"]
             
-        logger.error(f"Failed to create first comment on post {post_id}")
+        logger.warning(f"Skipped creating first comment on post {post_id} (missing rights or API error)")
         return None
 
 
