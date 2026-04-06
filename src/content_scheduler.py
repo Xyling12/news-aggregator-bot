@@ -32,30 +32,27 @@ TZ_IZHEVSK = timezone(timedelta(hours=4))
 DEFAULT_SCHEDULE = [
     (7,  0,  "weather",       "🌤 Погода"),
     (8,  0,  "holiday",       "🎉 Праздник"),
-    (9,  0,  "animal_clip",   "🐶 Животные утро (VK Клип)"),
     (9,  30, "history_fact",  "📅 История"),
     (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
-    (10, 30, "cat_clip",      "😸 Котики (VK Клип)"),
+    (10, 30, "cat_clip",      "😸 Котики 1 (VK Клип)"),
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
-    (13, 0,  "animal_clip",   "🐱 Животные обед (VK Клип)"),
     (13, 30, "recipe",        "🍽 Рецепт"),
     (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
+    (14, 30, "cat_clip",      "😸 Котики 2 (VK Клип)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
     (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
-    (18, 0,  "animal_clip",   "🐾 Животные вечер (VK Клип)"),
+    (18, 30, "cat_clip",      "😸 Котики 3 (VK Клип)"),
     (19, 0,  "evening_fun",   "😄 Вечерний"),
-    (20, 0,  "animal_clip",   "🐱 Животные ночь (VK Клип)"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
-    (21, 0,  "cat_clip",      "😹 Котики ночь (VK Клип)"),
     (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
+    (22, 30, "cat_clip",      "😹 Котики 4 (VK Клип)"),
 ]
 
 
 # How many days to remember a photo URL to avoid repeats
 _PHOTO_DEDUP_DAYS = 30
-_SLOT_DEDUP_DAYS = 7
 
 
 class ContentScheduler:
@@ -90,10 +87,6 @@ class ContentScheduler:
     def _photo_history_path(self) -> str:
         import os
         return os.path.join(self.config.media_dir, "..", "data", "photo_url_history.json")
-
-    def _published_slots_path(self) -> str:
-        import os
-        return os.path.join(self.config.media_dir, "..", "data", "published_slots.json")
 
     def _load_photo_history(self) -> set:
         """Load used photo URLs from disk; prune entries older than _PHOTO_DEDUP_DAYS."""
@@ -131,86 +124,6 @@ class ContentScheduler:
                 json.dump(data, f)
         except Exception as e:
             logger.warning(f"Failed to save photo history: {e}")
-
-    def _load_published_slots(self, today_str: str) -> set[str]:
-        """Load already-published slot keys for today from disk and prune old days."""
-        import json, os
-        path = os.path.normpath(self._published_slots_path())
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            if not isinstance(raw, dict):
-                return set()
-        except (FileNotFoundError, json.JSONDecodeError):
-            return set()
-        except Exception as e:
-            logger.warning(f"Failed to load published slot history: {e}")
-            return set()
-
-        cutoff = (self._now().date() - timedelta(days=_SLOT_DEDUP_DAYS)).isoformat()
-        cleaned: dict[str, list[str]] = {}
-        for day, slots in raw.items():
-            if not isinstance(day, str) or day < cutoff:
-                continue
-            if not isinstance(slots, list):
-                continue
-            valid_slots = [slot for slot in slots if isinstance(slot, str)]
-            if valid_slots:
-                cleaned[day] = valid_slots
-
-        if cleaned != raw:
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(cleaned, f, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"Failed to rewrite pruned slot history: {e}")
-
-        return set(cleaned.get(today_str, []))
-
-    def _save_published_slots(self, today_str: str) -> None:
-        """Persist today's published slot keys to disk."""
-        import json, os
-        path = os.path.normpath(self._published_slots_path())
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            if not isinstance(raw, dict):
-                raw = {}
-        except (FileNotFoundError, json.JSONDecodeError):
-            raw = {}
-        except Exception as e:
-            logger.warning(f"Failed to read slot history before save: {e}")
-            raw = {}
-
-        cutoff = (self._now().date() - timedelta(days=_SLOT_DEDUP_DAYS)).isoformat()
-        cleaned: dict[str, list[str]] = {}
-        for day, slots in raw.items():
-            if not isinstance(day, str) or day < cutoff:
-                continue
-            if isinstance(slots, list):
-                valid_slots = [slot for slot in slots if isinstance(slot, str)]
-                if valid_slots:
-                    cleaned[day] = valid_slots
-
-        if self._published_today:
-            cleaned[today_str] = sorted(self._published_today)
-        else:
-            cleaned.pop(today_str, None)
-
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(cleaned, f, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Failed to save published slot history: {e}")
-
-    def _mark_slot_done(self, today_str: str, slot_key: str, persist: bool = True) -> None:
-        """Mark slot as done for today; optionally persist to survive restarts."""
-        self._published_today.add(slot_key)
-        if persist:
-            self._save_published_slots(today_str)
 
     async def start(self):
         """Start the content scheduler loop."""
@@ -250,29 +163,21 @@ class ContentScheduler:
             try:
                 now = self._now()
                 today_str = now.strftime("%Y-%m-%d")
-                now_total_minutes = now.hour * 60 + now.minute
 
                 # Reset published list at midnight
                 if self._last_date != today_str:
-                    self._published_today = self._load_published_slots(today_str)
+                    self._published_today.clear()
                     self._failed_slots.clear()
                     # Reload photo history from disk (do NOT clear — dedup is persistent)
                     self._used_photo_urls = self._load_photo_history()
                     self._last_date = today_str
-                    logger.info(
-                        f"New day: {today_str}, schedule reset "
-                        f"(restored slots: {len(self._published_today)})"
-                    )
+                    logger.info(f"New day: {today_str}, schedule reset")
 
                 # Max retries for a single slot before giving up for today
                 MAX_CATCH_UP_RETRIES = 2
 
                 # Check each scheduled rubric
                 for hour, minute, rubric, label in DEFAULT_SCHEDULE:
-                    is_clip_slot = rubric in {"animal_clip", "cat_clip"}
-                    slot_max_retries = 1000 if is_clip_slot else MAX_CATCH_UP_RETRIES
-                    slot_catchup_minutes = 180 if is_clip_slot else 30
-                    slot_start_minutes = hour * 60 + minute
                     # Include hour+minute so same rubric at different times fires independently
                     # (e.g. animal_clip 4x/day, cat_clip 2x/day)
                     slot_key = f"{today_str}_{hour:02d}{minute:02d}_{rubric}"
@@ -282,55 +187,51 @@ class ContentScheduler:
                         continue
 
                     # Is it time? (within a 2-minute window)
-                    if slot_start_minutes <= now_total_minutes < slot_start_minutes + 2:
+                    if now.hour == hour and now.minute >= minute and now.minute < minute + 2:
                         logger.info(f"⏰ Time to publish: {label} ({rubric})")
                         try:
-                            ok = await self._publish_rubric(rubric, label)
-                            if not ok:
-                                raise RuntimeError(f"{rubric} returned False (nothing published)")
-                            self._mark_slot_done(today_str, slot_key, persist=True)
+                            await self._publish_rubric(rubric, label)
+                            self._published_today.add(slot_key)
                             self._failed_slots.pop(slot_key, None)  # clear on success
                         except Exception as e:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
-                            if (not is_clip_slot) and retries >= slot_max_retries:
+                            if retries >= MAX_CATCH_UP_RETRIES:
                                 msg = (
                                     f"⚠️ Scheduler: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
                                     f"Причина: {e}\n"
-                                    "Проверь env и внешние интеграции (VK/PEXELS/API)."
+                                    f"Проверь квоту Gemini API или добавь GROQ_API_KEY в env."
                                 )
                                 logger.warning(f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. Причина: {e}")
-                                self._mark_slot_done(today_str, slot_key, persist=False)  # stop retrying
+                                self._published_today.add(slot_key)  # stop retrying
                                 asyncio.create_task(self._notify_admins(msg))
 
-                    # Catch up: if bot was down and missed a slot
-                    elif slot_start_minutes <= now_total_minutes < slot_start_minutes + slot_catchup_minutes:
+                    # Catch up: if bot was down and missed a slot (within 30 min window)
+                    elif now.hour == hour and now.minute >= minute and now.minute < minute + 30:
                         retries = self._failed_slots.get(slot_key, 0)
-                        if (not is_clip_slot) and retries >= slot_max_retries:
+                        if retries >= MAX_CATCH_UP_RETRIES:
                             continue  # Already gave up on this slot
-                        logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{slot_max_retries}]")
+                        logger.info(f"⏰ Catch-up publish: {label} ({rubric}) [attempt {retries + 1}/{MAX_CATCH_UP_RETRIES}]")
                         try:
-                            ok = await self._publish_rubric(rubric, label)
-                            if not ok:
-                                raise RuntimeError(f"{rubric} returned False (nothing published)")
-                            self._mark_slot_done(today_str, slot_key, persist=True)
+                            await self._publish_rubric(rubric, label)
+                            self._published_today.add(slot_key)
                             self._failed_slots.pop(slot_key, None)
                         except Exception as e:
                             logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
                             retries = self._failed_slots.get(slot_key, 0) + 1
                             self._failed_slots[slot_key] = retries
-                            if (not is_clip_slot) and retries >= slot_max_retries:
+                            if retries >= MAX_CATCH_UP_RETRIES:
                                 msg = (
                                     f"⚠️ Catch-up: рубрика '{label}' ПРОПУЩЕНА сегодня.\n"
-                                    f"Причина: {e}\n"
-                                    "Проверь env и внешние интеграции (VK/PEXELS/API)."
+                                    f"AI квота исчерпана (все Gemini ключи + fallback).\n"
+                                    f"Добавь GROQ_API_KEY в env для автоматического резерва."
                                 )
                                 logger.warning(
-                                    f"⛔ {rubric}: catch-up {retries}/{slot_max_retries} — "
-                                    f"SKIPPED for today. Reason: {e}"
+                                    f"⛔ {rubric}: catch-up {retries}/{MAX_CATCH_UP_RETRIES} — "
+                                    f"SKIPPED для сегодня. AI квота исчерпана."
                                 )
-                                self._mark_slot_done(today_str, slot_key, persist=False)  # stop retrying
+                                self._published_today.add(slot_key)  # stop retrying
                                 asyncio.create_task(self._notify_admins(msg))
 
                 await asyncio.sleep(30)  # Check every 30 seconds
@@ -353,186 +254,8 @@ class ContentScheduler:
         text, photo_url = None, None
         weather_data = None
         
-        if rubric == "animal_clip":
-            try:
-                import src.bot as bot_module
-                vk = getattr(bot_module, '_vk_publisher', None)
-                if not (vk and vk.enabled):
-                    raise RuntimeError("animal_clip: VK not configured")
-
-                import os, json, random, time
-                from src.media_processor import MediaProcessor
-                import aiohttp as _aiohttp
-                pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
-
-                if not pexels_key:
-                    raise RuntimeError("animal_clip: PEXELS_API_KEY is empty")
-                if not getattr(vk, "has_explicit_user_token", False):
-                    logger.warning(
-                        "animal_clip: VK_USER_TOKEN is empty; upload_clip will fallback to regular VK video mode"
-                    )
-
-                # ── Load history of used Pexels video IDs ──────────────────
-                history_path = os.path.join(self.config.media_dir, "..", "data", "clip_history.json")
-                history_path = os.path.normpath(history_path)
-                os.makedirs(os.path.dirname(history_path), exist_ok=True)
-                try:
-                    with open(history_path, "r") as hf:
-                        used_ids: list = json.load(hf)
-                except (FileNotFoundError, json.JSONDecodeError):
-                    used_ids = []
-
-                # ── Pick random animal category ──────────────────────────────
-                animal_pools = [
-                    ["funny cat", "cute kitten playing"],
-                    ["funny dog", "puppy playing"],
-                    ["funny animals", "cute pets"],
-                    ["baby animals", "cute animal"],
-                    ["funny bunny rabbit", "hamster cute"],
-                    ["dogs playing", "cats funny"],
-                    ["cute kitten", "cat video"],
-                    ["adorable puppy", "dog funny"],
-                ]
-                keywords = random.choice(animal_pools)
-
-                mp = MediaProcessor(
-                    pexels_key=pexels_key,
-                    media_dir=self.config.media_dir,
-                )
-
-                logger.info(f"animal_clip: searching Pexels HD videos for {keywords} (excluding {len(used_ids)} used)")
-                result = await mp.search_pexels_video_candidate(
-                    keywords,
-                    min_duration=5,
-                    max_duration=40,
-                    exclude_ids=used_ids,
-                    max_pages=4,
-                )
-
-                if not result:
-                    # Try generic fallback if specific query failed
-                    logger.info("animal_clip: retry with generic 'cute animals'")
-                    result = await mp.search_pexels_video_candidate(
-                        ["cute animals"],
-                        min_duration=5,
-                        max_duration=40,
-                        exclude_ids=used_ids,
-                        max_pages=4,
-                    )
-
-                if not result:
-                    # Final fallback: allow repeats to avoid empty slot
-                    logger.info("animal_clip: retry with repeats allowed")
-                    result = await mp.search_pexels_video_candidate(
-                        ["cute animals"],
-                        min_duration=5,
-                        max_duration=60,
-                        exclude_ids=[],
-                        max_pages=2,
-                    )
-
-                if not result:
-                    raise RuntimeError("animal_clip: no HD videos found on Pexels")
-
-                pexels_vid_id = result["id"]
-                url_candidates = list(result.get("urls") or ([result.get("url")] if result.get("url") else []))
-
-                # ── Download video with retry on 403 ─────────────────────────
-                tmp_path = os.path.join(
-                    self.config.media_dir,
-                    f"animal_clip_{int(time.time())}.mp4"
-                )
-                dl_headers = {
-                    "Authorization": os.getenv("PEXELS_API_KEY", ""),
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Referer": "https://www.pexels.com/",
-                    "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-                }
-                download_ok = False
-                for _dl_try in range(3):
-                    async with _aiohttp.ClientSession(headers=dl_headers) as sess:
-                        for v_url in url_candidates:
-                            async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
-                                if resp.status == 200:
-                                    with open(tmp_path, "wb") as f:
-                                        f.write(await resp.read())
-                                    download_ok = True
-                                    break
-                                elif resp.status in (403, 404):
-                                    logger.warning(
-                                        f"animal_clip: video file {resp.status} id={pexels_vid_id}, trying alternative url"
-                                    )
-                                    continue
-                                else:
-                                    logger.error(f"animal_clip: download failed HTTP {resp.status}")
-                                    break
-                        if download_ok:
-                            break
-                        used_ids.append(pexels_vid_id)
-                        retry_result = await mp.search_pexels_video_candidate(
-                            keywords, min_duration=5, max_duration=40, exclude_ids=used_ids
-                        )
-                        if not retry_result:
-                            break
-                        pexels_vid_id = retry_result["id"]
-                        url_candidates = list(
-                            retry_result.get("urls") or ([retry_result.get("url")] if retry_result.get("url") else [])
-                        )
-                if not download_ok:
-                    raise RuntimeError("animal_clip: all download attempts failed")
-
-
-                file_mb = os.path.getsize(tmp_path) / 1024 / 1024
-                logger.info(f"animal_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
-
-                # ── Upload to VK as Clip ─────────────────────────────────────
-                captions = [
-                    "🐾 Позитивный момент дня",
-                    "🐱 Котики заряжают!",
-                    "🐶 Хорошего настроения, Ижевск!",
-                    "🐾 Доза позитива",
-                    "😄 Смотришь и улыбаешься",
-                    "🐱 Они просто наслаждаются жизнью",
-                    "🐶 Лучший контент в интернете",
-                    "🐾 Просто посмотри",
-                    "😻 Ну как тут не улыбнуться?",
-                ]
-                caption = random.choice(captions) + "\n\n📱 @IzhevskTodayNews"
-
-                clip_id = await vk.upload_clip(
-                    tmp_path,
-                    caption=caption,
-                    link_url="https://vk.com/izhevsk_segodnya",
-                )
-
-                # ── Cleanup ──────────────────────────────────────────────────
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-
-                if clip_id:
-                    # Save used ID to history (keep last 500)
-                    used_ids.append(pexels_vid_id)
-                    if len(used_ids) > 500:
-                        used_ids = used_ids[-500:]
-                    try:
-                        with open(history_path, "w") as hf:
-                            json.dump(used_ids, hf)
-                    except Exception as he:
-                        logger.warning(f"animal_clip: failed to save history: {he}")
-
-                    logger.info(f"✅ VK Animal Clip published (video_id={clip_id}, pexels_id={pexels_vid_id})")
-                    return True
-                else:
-                    raise RuntimeError("animal_clip: upload_clip returned None")
-
-            except Exception as e:
-                logger.error(f"animal_clip failed: {e}", exc_info=True)
-                raise RuntimeError(f"animal_clip failed: {e}") from e
-
         if rubric == "cat_clip":
-            """10:30 и 21:00 — VK Клип только с котиками (Pexels Video)."""
+            """10:30, 14:30, 18:30, 22:30 — VK Клип (Telegram Scraper: @mimiumor)."""
             try:
                 import src.bot as bot_module
                 vk = getattr(bot_module, '_vk_publisher', None)
@@ -542,163 +265,75 @@ class ContentScheduler:
 
                 import os, json, random, time
                 from src.media_processor import MediaProcessor
-                import aiohttp as _aiohttp
-                pexels_key = os.getenv("PEXELS_API_KEY", "").strip()
 
-                if not pexels_key:
-                    raise RuntimeError("cat_clip: PEXELS_API_KEY is empty")
-                if not getattr(vk, "has_explicit_user_token", False):
-                    logger.warning(
-                        "cat_clip: VK_USER_TOKEN is empty; upload_clip will fallback to regular VK video mode"
-                    )
-
-                # ── История просмотренных ID (отдельный файл от animal_clip) ──
+                # ── История просмотренных URL (чтобы не дублировать клипы) ──
                 history_path = os.path.normpath(
                     os.path.join(self.config.media_dir, "..", "data", "cat_clip_history.json")
                 )
                 os.makedirs(os.path.dirname(history_path), exist_ok=True)
                 try:
                     with open(history_path, "r") as hf:
-                        used_ids: list = json.load(hf)
+                        used_urls: list = json.load(hf)
                 except (FileNotFoundError, json.JSONDecodeError):
-                    used_ids = []
+                    used_urls = []
 
-                # ── Только запросы с котиками ────────────────────────────────
-                cat_pools = [
-                    ["funny cat", "kitten playing"],
-                    ["cute kitten", "cat funny"],
-                    ["cat video", "kitten cute"],
-                    ["funny kitten", "cat silly"],
-                    ["cats playing", "kittens"],
-                ]
-                keywords = random.choice(cat_pools)
+                mp = MediaProcessor(media_dir=self.config.media_dir)
 
-                mp = MediaProcessor(
-                    pexels_key=pexels_key,
-                    media_dir=self.config.media_dir,
-                )
+                logger.info(f"cat_clip: searching Telegram clips (excluding {len(used_urls)} used URLs)")
+                
+                # Забираем видео из тг-канала mimiumor
+                clip_path, target_url = await mp.fetch_telegram_clip(["mimiumor"], exclude_urls=used_urls)
 
-                logger.info(f"cat_clip: searching Pexels for {keywords} (excluding {len(used_ids)} used)")
-                result = await mp.search_pexels_video_candidate(
-                    keywords,
-                    min_duration=5,
-                    max_duration=45,
-                    exclude_ids=used_ids,
-                    max_pages=4,
-                )
-                if not result:
-                    result = await mp.search_pexels_video_candidate(
-                        ["cats", "kittens"],
-                        min_duration=5,
-                        max_duration=60,
-                        exclude_ids=used_ids,
-                        max_pages=4,
-                    )
-                if not result:
-                    logger.info("cat_clip: retry with repeats allowed")
-                    result = await mp.search_pexels_video_candidate(
-                        ["cats", "kittens"],
-                        min_duration=5,
-                        max_duration=90,
-                        min_quality_px=720,
-                        exclude_ids=[],
-                        max_pages=2,
-                    )
-                if not result:
-                    raise RuntimeError("cat_clip: no video found on Pexels")
+                if not clip_path or not target_url:
+                    logger.warning("cat_clip: no new video found on Telegram, skipping")
+                    return False
 
-                pexels_vid_id = result["id"]
-                url_candidates = list(result.get("urls") or ([result.get("url")] if result.get("url") else []))
-
-                # ── Скачиваем видео с retry на 403 ───────────────────────────
-                tmp_path = os.path.join(
-                    self.config.media_dir,
-                    f"cat_clip_{int(time.time())}.mp4"
-                )
-                dl_headers = {
-                    "Authorization": os.getenv("PEXELS_API_KEY", ""),
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Referer": "https://www.pexels.com/",
-                    "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-                }
-                download_ok = False
-                for _dl_try in range(3):
-                    async with _aiohttp.ClientSession(headers=dl_headers) as sess:
-                        for v_url in url_candidates:
-                            async with sess.get(v_url, timeout=_aiohttp.ClientTimeout(total=90)) as resp:
-                                if resp.status == 200:
-                                    with open(tmp_path, "wb") as f:
-                                        f.write(await resp.read())
-                                    download_ok = True
-                                    break
-                                elif resp.status in (403, 404):
-                                    logger.warning(
-                                        f"cat_clip: video file {resp.status} id={pexels_vid_id}, trying alternative url"
-                                    )
-                                    continue
-                                else:
-                                    logger.error(f"cat_clip: download failed HTTP {resp.status}")
-                                    break
-                        if download_ok:
-                            break
-                        used_ids.append(pexels_vid_id)
-                        retry_result = await mp.search_pexels_video_candidate(
-                            keywords, min_duration=5, max_duration=45, exclude_ids=used_ids
-                        )
-                        if not retry_result:
-                            break
-                        pexels_vid_id = retry_result["id"]
-                        url_candidates = list(
-                            retry_result.get("urls") or ([retry_result.get("url")] if retry_result.get("url") else [])
-                        )
-                if not download_ok:
-                    raise RuntimeError("cat_clip: all download attempts failed")
-
-                file_mb = os.path.getsize(tmp_path) / 1024 / 1024
-                logger.info(f"cat_clip: downloaded {file_mb:.1f} MB id={pexels_vid_id}")
+                file_mb = os.path.getsize(clip_path) / 1024 / 1024
+                logger.info(f"cat_clip: downloaded {file_mb:.1f} MB from {target_url}")
 
                 # ── Загружаем в VK Клипы ─────────────────────────────────────
                 captions = [
                     "😸 Котики — лучшее лекарство",
-                    "🐱 Просто котик. Просто хорошо.",
+                    "🐱 Просто мило. Просто хорошо.",
                     "😹 Ну как тут не улыбнуться?",
-                    "🐾 Котики заряжают позитивом!",
+                    "🐾 Заряжаемся позитивом!",
                     "😻 Они просто наслаждаются жизнью",
                     "🐱 Смотришь — и день стал лучше",
-                    "😸 Минута позитива с котиком",
+                    "😸 Минута позитива",
                     "🐾 Лучший контент в интернете — факт!",
                 ]
                 caption = random.choice(captions) + "\n\n📱 @IzhevskTodayNews"
 
                 clip_id = await vk.upload_clip(
-                    tmp_path,
+                    clip_path,
                     caption=caption,
                     link_url="https://vk.com/izhevsk_segodnya",
                 )
 
                 # ── Чистим файл ───────────────────────────────────────────────
                 try:
-                    os.remove(tmp_path)
+                    os.remove(clip_path)
                 except Exception:
                     pass
 
                 if clip_id:
-                    used_ids.append(pexels_vid_id)
-                    if len(used_ids) > 500:
-                        used_ids = used_ids[-500:]
+                    used_urls.append(target_url)
+                    if len(used_urls) > 500:
+                        used_urls = used_urls[-500:]
                     try:
                         with open(history_path, "w") as hf:
-                            json.dump(used_ids, hf)
+                            json.dump(used_urls, hf)
                     except Exception as he:
                         logger.warning(f"cat_clip: failed to save history: {he}")
-                    logger.info(f"✅ VK Cat Clip published (video_id={clip_id}, pexels_id={pexels_vid_id})")
+                    logger.info(f"✅ VK Cat Clip published (video_id={clip_id}, tg_url={target_url})")
                     return True
                 else:
-                    raise RuntimeError("cat_clip: upload_clip returned None")
+                    logger.warning("cat_clip: upload_clip returned None")
+                    return False
 
             except Exception as e:
                 logger.error(f"cat_clip failed: {e}", exc_info=True)
-                raise RuntimeError(f"cat_clip failed: {e}") from e
+            return False
 
         if rubric == "cat_story":
             try:
@@ -748,10 +383,7 @@ class ContentScheduler:
                         pexels_key=os.getenv("PEXELS_API_KEY", ""),
                         media_dir=self.config.media_dir,
                     )
-                    video_candidate = await mp.search_pexels_video_candidate(
-                        ["Izhevsk", "nature", "city"], min_duration=5, max_duration=15
-                    )
-                    v_url = video_candidate["url"] if video_candidate else None
+                    v_url = await mp.search_pexels_video(["Izhevsk", "nature", "city"], min_duration=5, max_duration=15)
                     
                     if v_url:
                         vid_path = await self.story_generator.generate_video_story(v_url, short_text)
@@ -1070,8 +702,6 @@ class ContentScheduler:
                     )
                 except Exception:
                     pass
-
-            return True
 
         except Exception as e:
             logger.error(f"Failed to publish {label} to {target}: {e}")

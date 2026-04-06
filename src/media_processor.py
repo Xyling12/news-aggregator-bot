@@ -698,3 +698,59 @@ class MediaProcessor:
         except Exception as e:
             logger.error(f"Image resize failed: {e}")
             return image_path
+
+    async def fetch_telegram_clip(self, channel_names: list[str], exclude_urls: list[str] = None) -> tuple[Optional[str], Optional[str]]:
+        """
+        Scrapes the Telegram web preview to find the latest MP4 video from the provided channels.
+        Returns a tuple: (local_file_path, original_url).
+        """
+        import random
+        import tempfile
+        import re
+        
+        exclude = set(exclude_urls or [])
+        channel_name = random.choice(channel_names)
+        base_url = f"https://t.me/s/{channel_name}"
+        logger.info(f"MediaProcessor: fetching from Telegram web: {base_url}")
+        
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(base_url, timeout=15) as resp:
+                    if resp.status != 200:
+                        logger.error(f"TG fetch failed: HTTP {resp.status}")
+                        return None, None
+                    html = await resp.text()
+
+            # Find all video tags
+            matches = re.findall(r'<video[^>]+src="([^"]+\.mp4[^"]*)"', html, flags=re.IGNORECASE)
+            
+            # Filter out already seen urls
+            fresh_matches = [m for m in matches if m not in exclude]
+            
+            if not fresh_matches:
+                logger.warning(f"No unseen MP4 videos found in {channel_name} (found {len(matches)} total)")
+                return None, None
+            
+            recent_vids = fresh_matches[-10:] if len(fresh_matches) > 10 else fresh_matches
+            target_url = random.choice(recent_vids)
+            
+            logger.info(f"TG: downloading MP4 from {target_url[:50]}...")
+            
+            out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            out.close()
+            
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(target_url, timeout=120) as resp:
+                    if resp.status != 200:
+                        logger.error(f"TG download failed: HTTP {resp.status}")
+                        return None, None
+                    with open(out.name, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(65536):
+                            f.write(chunk)
+            
+            logger.info(f"TG clip ready -> {out.name}")
+            return out.name, target_url
+
+        except Exception as e:
+            logger.error(f"TG fetch error: {e}")
+            return None, None
