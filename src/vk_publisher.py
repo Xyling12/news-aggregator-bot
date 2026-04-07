@@ -637,6 +637,11 @@ class VKPublisher:
         if file_size > 256 * 1024 * 1024:  # 256 MB VK limit
             logger.error(f"Clip video too large: {file_size / 1024 / 1024:.1f} MB (max 256 MB)")
             return None
+        # VK Clips don't support "link" parameter for groups (causes Error 100).
+        # Append the link to the description text instead.
+        if link_url:
+            caption = f"{caption}\n\n{link_url}" if caption else link_url
+
         # Step 1: Save video object — get upload server URL
         save_params: dict = {
             "group_id": int(self.group_id),
@@ -653,8 +658,6 @@ class VKPublisher:
             # Fallback: if VK_USER_TOKEN is not configured, publish as regular video.
             save_params["wallpost"] = 1
             logger.warning("VK Clip upload: VK_USER_TOKEN is empty, fallback to regular VK video mode")
-        if link_url:
-            save_params["link"] = link_url
 
         save_result = await self._api_call("video.save", **save_params)
         if not save_result or not save_result.get("upload_url"):
