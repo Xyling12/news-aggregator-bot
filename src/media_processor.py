@@ -364,15 +364,16 @@ class MediaProcessor:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         }
         proxy_url = os.getenv("PEXELS_PROXY", "").strip()
-        use_proxy = bool(proxy_url and SOCKS_AVAILABLE and proxy_url.startswith("socks"))
+        use_proxy = bool(proxy_url)
 
         async def _do_request(with_proxy: bool) -> List[dict]:
+            connector = None
             if with_proxy:
-                connector = ProxyConnector.from_url(proxy_url)
-                session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
-                logger.debug(f"Pexels: using SOCKS5 proxy {proxy_url[:30]}...")
-            else:
-                session_ctx = aiohttp.ClientSession(headers=headers)
+                if proxy_url.startswith("socks") and SOCKS_AVAILABLE:
+                    connector = ProxyConnector.from_url(proxy_url)
+                    logger.debug(f"Pexels: using SOCKS proxy {proxy_url[:30]}...")
+            
+            session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
 
             found = []
             async with session_ctx as session:
@@ -382,9 +383,16 @@ class MediaProcessor:
                     "orientation": "landscape",
                     "locale": "ru-RU",
                 }
+                
+                # If it's an HTTP proxy, pass it explicitly to the .get() method if not using ProxyConnector
+                http_proxy = proxy_url if (with_proxy and proxy_url.startswith("http")) else None
+                if http_proxy:
+                    logger.debug(f"Pexels: using HTTP proxy {http_proxy[:30]}...")
+                
                 async with session.get(
                     "https://api.pexels.com/v1/search",
                     params=params,
+                    proxy=http_proxy,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 200:
