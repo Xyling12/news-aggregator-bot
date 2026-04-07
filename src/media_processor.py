@@ -368,10 +368,13 @@ class MediaProcessor:
 
         async def _do_request(with_proxy: bool) -> List[dict]:
             connector = None
-            if with_proxy:
-                if proxy_url.startswith("socks") and SOCKS_AVAILABLE:
+            if with_proxy and proxy_url:
+                if SOCKS_AVAILABLE:
+                    # ProxyConnector handles both socks5:// and http:// natively with auth
                     connector = ProxyConnector.from_url(proxy_url)
-                    logger.debug(f"Pexels: using SOCKS proxy {proxy_url[:30]}...")
+                    logger.debug(f"Pexels: using proxy {proxy_url[:30]}...")
+                else:
+                    logger.warning("Proxy requested but aiohttp_socks not available")
             
             session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
 
@@ -384,15 +387,9 @@ class MediaProcessor:
                     "locale": "ru-RU",
                 }
                 
-                # If it's an HTTP proxy, pass it explicitly to the .get() method if not using ProxyConnector
-                http_proxy = proxy_url if (with_proxy and proxy_url.startswith("http")) else None
-                if http_proxy:
-                    logger.debug(f"Pexels: using HTTP proxy {http_proxy[:30]}...")
-                
                 async with session.get(
                     "https://api.pexels.com/v1/search",
                     params=params,
-                    proxy=http_proxy,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 200:

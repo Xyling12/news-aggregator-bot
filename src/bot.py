@@ -1611,12 +1611,19 @@ async def _maybe_comment_competitor_post() -> None:
         comment_text,
         owner_id=candidate["owner_id"],
     )
-    if not comment_id:
-        return
-
+    
+    # Regardless of success or failure, mark this post as processed to prevent infinite retry loop
+    # if the target community has disabled comments or blocked group commenting.
     posted_keys.add(candidate["post_key"])
     posted_keys_list = list(posted_keys)[-200:]
     await _db.set_setting("vk_competitor_post_keys", json.dumps(posted_keys_list, ensure_ascii=False))
+
+    if not comment_id:
+        # Save a cool-down action anyway so it doesn't just immediately hit the next post of this target
+        last_actions[selected_key] = now.isoformat(timespec="seconds")
+        await _db.set_setting("vk_competitor_last_action_map_json", json.dumps(last_actions, ensure_ascii=False))
+        return
+
     counts[selected_key] = counts.get(selected_key, 0) + 1
     total_today = sum(counts.values())
     last_actions[selected_key] = now.isoformat(timespec="seconds")
