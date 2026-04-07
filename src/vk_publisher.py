@@ -687,7 +687,14 @@ class VKPublisher:
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=120),  # large files need more time
             ) as resp:
-                upload_result = await resp.json(content_type=None)
+                import json
+                raw_text = await resp.text()
+                try:
+                    upload_result = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    logger.error(f"VK Clip upload Non-JSON HTTP {resp.status}: {raw_text[:500]}")
+                    return None
+                
                 if resp.status != 200:
                     logger.error(
                         f"VK Clip upload HTTP {resp.status}: {str(upload_result)[:200]}"
