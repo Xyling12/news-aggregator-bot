@@ -570,31 +570,38 @@ class VKPublisher:
         upload_url = upload_server["upload_url"]
 
         # Step 2: Form POST the file
-        try:
-            form = aiohttp.FormData()
-            with open(video_path, 'rb') as f:
-                video_bytes = f.read()
-                
-            form.add_field(
-                "video_file",
-                video_bytes,
-                filename="story.mp4",
-                content_type="video/mp4",
-            )
+        import requests
+        
+        def _upload_story_sync() -> dict:
+            try:
+                with open(video_path, 'rb') as vf:
+                    resp = requests.post(
+                        upload_url,
+                        files={"video_file": ("story.mp4", vf, "video/mp4")},
+                        timeout=60
+                    )
+            except Exception as e:
+                return {"_error": f"VK story video requests post failed: {e}"}
             
-            session = await self._get_session()
-            async with session.post(upload_url, data=form, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                upload_result = await resp.json()
-                
-            if "response" in upload_result:
-                upload_result = upload_result["response"]
-                
-            if not upload_result.get("upload_result"):
-                logger.error(f"VK story video upload returned empty: {upload_result}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"VK story video upload network error: {type(e).__name__}: {e}")
+            try:
+                import json
+                upload_res = json.loads(resp.text)
+                if resp.status_code != 200:
+                    upload_res["_error"] = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                return upload_res
+            except json.JSONDecodeError:
+                return {"_error": f"Non-JSON HTTP {resp.status_code}: {resp.text[:500]}"}
+
+        upload_result = await asyncio.to_thread(_upload_story_sync)
+        if "_error" in upload_result:
+            logger.error(f"VK story video upload failed: {upload_result['_error']}")
+            return False
+
+        if "response" in upload_result:
+            upload_result = upload_result["response"]
+            
+        if not upload_result.get("upload_result"):
+            logger.error(f"VK story video upload returned empty: {upload_result}")
             return False
 
         # Step 3: Save the story
@@ -669,46 +676,38 @@ class VKPublisher:
         owner_id   = save_result.get("owner_id")
 
         # Step 2: Upload the video file
-        try:
-            with open(video_path, "rb") as f:
-                video_bytes = f.read()
-
-            form = aiohttp.FormData()
-            form.add_field(
-                "video_file",
-                video_bytes,
-                filename="clip.mp4",
-                content_type="video/mp4",
-            )
-
-            session = await self._get_session()
-            async with session.post(
-                upload_url,
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=120),  # large files need more time
-            ) as resp:
-                import json
-                raw_text = await resp.text()
-                try:
-                    upload_result = json.loads(raw_text)
-                except json.JSONDecodeError:
-                    logger.error(f"VK Clip upload Non-JSON HTTP {resp.status}: {raw_text[:500]}")
-                    return None
-                
-                if resp.status != 200:
-                    logger.error(
-                        f"VK Clip upload HTTP {resp.status}: {str(upload_result)[:200]}"
+        import requests
+        
+        def _upload_video_sync() -> dict:
+            try:
+                # `requests` automatically handles the boundary securely for Tomcat servers
+                with open(video_path, "rb") as vf:
+                    resp = requests.post(
+                        upload_url,
+                        files={"video_file": ("clip.mp4", vf, "video/mp4")},
+                        timeout=120
                     )
-                    return None
+            except Exception as e:
+                return {"_error": f"Requests post failed: {e}"}
+            
+            raw_text = resp.text
+            try:
+                import json
+                upload_res = json.loads(raw_text)
+                if resp.status_code != 200:
+                    upload_res["_error"] = f"HTTP {resp.status_code}: {raw_text[:200]}"
+                return upload_res
+            except json.JSONDecodeError:
+                return {"_error": f"Non-JSON HTTP {resp.status_code}: {raw_text[:500]}"}
 
-            logger.debug(f"VK Clip upload response: {upload_result}")
+        upload_result = await asyncio.to_thread(_upload_video_sync)
+        if "_error" in upload_result:
+            logger.error(f"VK Clip upload failed: {upload_result['_error']}")
+            return None
 
-        except asyncio.TimeoutError:
-            logger.error("VK Clip upload timeout — server took >120s")
-            return None
-        except Exception as e:
-            logger.error(f"VK Clip upload error: {type(e).__name__}: {e}")
-            return None
+        logger.debug(f"VK Clip upload response: {upload_result}")
+
+        # Step 3: Save the clipped video (the final "video.save" call... wait, VK Clips doesn't require a second save, you just use the video_id)
 
         # Step 3:
         # - real VK Clips (`to_clips=1`) are left for VK processing;
