@@ -364,70 +364,66 @@ class MediaProcessor:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         }
         proxy_url = os.getenv("PEXELS_PROXY", "").strip()
-        use_proxy = bool(proxy_url)
-
+        import requests
+        
         async def _do_request(with_proxy: bool) -> List[dict]:
-            connector = None
-            if with_proxy and proxy_url:
-                if SOCKS_AVAILABLE:
-                    # ProxyConnector handles both socks5:// and http:// natively with auth
-                    connector = ProxyConnector.from_url(proxy_url)
-                    logger.debug(f"Pexels: using proxy {proxy_url[:30]}...")
-                else:
-                    logger.warning("Proxy requested but aiohttp_socks not available")
-            
-            session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
-
-            found = []
-            async with session_ctx as session:
+            def sync_fetch():
+                url = "https://api.pexels.com/v1/search"
                 params = {
                     "query": query,
                     "per_page": count + 5,
                     "orientation": "landscape",
                     "locale": "ru-RU",
                 }
+                proxies = {"http": proxy_url, "https": proxy_url} if (with_proxy and proxy_url) else None
+                if proxies:
+                    logger.debug(f"Pexels: using proxy by requests {proxy_url[:30]}...")
                 
-                async with session.get(
-                    "https://api.pexels.com/v1/search",
-                    params=params,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        all_photos = data.get("photos", [])
+                return requests.get(url, headers=headers, params=params, proxies=proxies, timeout=15)
+            
+            found = []
+            try:
+                resp = await asyncio.to_thread(sync_fetch)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    all_photos = data.get("photos", [])
 
-                        people_words = {"people", "person", "man", "woman", "group",
-                                        "team", "couple", "family", "children", "russian"}
-                        query_words = set(query.lower().split())
-                        query_wants_people = bool(query_words & people_words)
+                    people_words = {"people", "person", "man", "woman", "group",
+                                    "team", "couple", "family", "children", "russian"}
+                    query_words = set(query.lower().split())
+                    query_wants_people = bool(query_words & people_words)
 
-                        if not query_wants_people and len(all_photos) > 1:
-                            people_alt = {"people", "person", "man", "woman", "group",
-                                          "team", "couple", "meeting", "coworkers"}
-                            all_photos.sort(key=lambda p: any(
-                                w in (p.get("alt", "") or "").lower()
-                                for w in people_alt
-                            ))
+                    if not query_wants_people and len(all_photos) > 1:
+                        people_alt = {"people", "person", "man", "woman", "group",
+                                      "team", "couple", "meeting", "coworkers"}
+                        all_photos.sort(key=lambda p: any(
+                            w in (p.get("alt", "") or "").lower()
+                            for w in people_alt
+                        ))
 
-                        for photo in all_photos[:count]:
-                            url = photo.get("src", {}).get("large", "")
-                            if not url:
-                                continue
-                            found.append({
-                                "url": url,
-                                "thumb_url": photo.get("src", {}).get("medium", url),
-                                "description": photo.get("alt", "") or query,
-                                "author": photo.get("photographer", "Pexels"),
-                                "source": "pexels",
-                            })
-                        logger.info(f"Pexels: found {len(found)} photos for '{query}'")
-                    elif resp.status == 429:
-                        logger.warning("Pexels: rate limit exceeded (200 req/hour)")
-                    elif resp.status == 401:
-                        logger.error("Pexels: invalid API key")
-                    else:
-                        body = await resp.text()
-                        logger.error(f"Pexels API {resp.status}: {body[:200]}")
+                    for photo in all_photos[:count]:
+                        url = photo.get("src", {}).get("large", "")
+                        if not url:
+                            continue
+                        found.append({
+                            "url": url,
+                            "thumb_url": photo.get("src", {}).get("medium", url),
+                            "description": photo.get("alt", "") or query,
+                            "author": photo.get("photographer", "Pexels"),
+                            "source": "pexels",
+                        })
+                    logger.info(f"Pexels: found {len(found)} photos for '{query}'")
+                elif resp.status_code == 429:
+                    logger.warning("Pexels: rate limit exceeded (200 req/hour)")
+                elif resp.status_code == 401:
+                    logger.error("Pexels: invalid API key")
+                elif resp.status_code == 404:
+                    logger.error(f"Pexels API 404. Proxy mapping issue or connection error.")
+                else:
+                    logger.error(f"Pexels API {resp.status_code}: {resp.text[:200]}")
+            except Exception as e:
+                logger.error(f"Pexels requests proxy error: {e}")
+            
             return found
 
         try:
