@@ -938,10 +938,7 @@ class ContentGenerator:
         if text:
             text += "\n\n─ ─ ─ ─ ─\n#итогидня #ижевск"
             text += "\n\n📲 @IzhevskTodayNews  |  🤖 @IzhevskTodayBot"
-        return await self._generate_with_photo(
-            text,
-            hint_keywords=["Russia city evening", "Russian street winter", "Udmurtia Russia"],
-        )
+        return await self._generate_with_photo(text, hint_keywords=None)
 
     async def generate_holiday(self) -> Tuple[Optional[str], Optional[str]]:
         """Generate holiday greeting post if today is a holiday."""
