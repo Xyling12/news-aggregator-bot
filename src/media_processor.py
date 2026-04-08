@@ -655,13 +655,24 @@ class MediaProcessor:
         """Download a stock photo and save it locally.
 
         Sends a proper User-Agent to avoid 403 from Wikimedia and similar CDNs.
+        Uses proxy for pexels.com URLs.
         """
         try:
             filepath = os.path.join(self.media_dir, filename)
             headers = {
                 "User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"
             }
-            async with aiohttp.ClientSession(headers=headers) as session:
+
+            proxy_url = os.getenv("PEXELS_PROXY", "").strip()
+            use_proxy = bool(proxy_url and "pexels.com" in photo_url.lower())
+
+            if use_proxy and SOCKS_AVAILABLE and proxy_url.startswith("socks"):
+                connector = ProxyConnector.from_url(proxy_url)
+                session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
+            else:
+                session_ctx = aiohttp.ClientSession(headers=headers)
+
+            async with session_ctx as session:
                 async with session.get(
                     photo_url, timeout=aiohttp.ClientTimeout(total=20)
                 ) as resp:
