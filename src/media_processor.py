@@ -364,6 +364,7 @@ class MediaProcessor:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         }
         proxy_url = os.getenv("PEXELS_PROXY", "").strip()
+        use_proxy = bool(proxy_url)
         import requests
         
         async def _do_request(with_proxy: bool) -> List[dict]:
@@ -417,12 +418,14 @@ class MediaProcessor:
                     logger.warning("Pexels: rate limit exceeded (200 req/hour)")
                 elif resp.status_code == 401:
                     logger.error("Pexels: invalid API key")
-                elif resp.status_code == 404:
-                    logger.error(f"Pexels API 404. Proxy mapping issue or connection error.")
                 else:
                     logger.error(f"Pexels API {resp.status_code}: {resp.text[:200]}")
+                    if with_proxy:
+                        raise RuntimeError(f"Proxy returned HTTP {resp.status_code}")
             except Exception as e:
                 logger.error(f"Pexels requests proxy error: {e}")
+                if with_proxy:
+                    raise  # Re-raise to trigger the direct fallback in the outer block
             
             return found
 

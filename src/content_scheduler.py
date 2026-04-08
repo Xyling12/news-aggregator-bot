@@ -549,9 +549,47 @@ class ContentScheduler:
         # IMPORTANT: Telegram caption limit is 1024 chars. For long posts (5 facts, history, etc.)
         # we send photo first (no caption), then full text as a separate message.
         CAPTION_LIMIT = 900  # safe threshold below 1024
+        
+        fallback_path = None
+        if not photo_url and rubric not in ("holiday", "cat_clip", "cat_story", "video_story", "fact_story", "daily_digest"):
+            try:
+                logger.info(f"{rubric}: photo search returned None. Generating gradient text image as fallback.")
+                if not hasattr(self, 'story_generator'):
+                    from src.story_generator import StoryGenerator
+                    self.story_generator = StoryGenerator()
+                import re as _re2
+                import os
+                clean_txt = _re2.sub(r'<[^>]+>', '', text)
+                clean_txt = _re2.sub(r'#\S+', '', clean_txt).strip()
+                clean_txt = _re2.sub(r'^[\U0001F300-\U0001FAFF\s]+\n', '', clean_txt, flags=_re2.MULTILINE)
+                lines = [l.strip() for l in clean_txt.splitlines() if l.strip()]
+                headline = lines[0] if lines else clean_txt[:120]
+                headline = _re2.sub(r'\s+\d+\.\s*$', '', headline).strip()
+                if len(headline) > 120:
+                    headline = headline[:117] + "..."
+                
+                _RUBRIC_TO_THEME = {
+                    "weather": "weather", "history_fact": "history",
+                    "five_facts": "five_facts", "recipe": "recipe",
+                    "lifehack": "lifehack", "place": "place",
+                    "evening_fun": "evening", "daily_digest": "digest"
+                }
+                theme_name = _RUBRIC_TO_THEME.get(rubric, "fact")
+                
+                story_bytes = await self.story_generator.generate_rubric_story(
+                    headline, rubric=theme_name, photo_url=None
+                )
+                if story_bytes:
+                    fallback_path = os.path.join(self.config.media_dir, f"fallback_{rubric}.jpg")
+                    os.makedirs(self.config.media_dir, exist_ok=True)
+                    with open(fallback_path, "wb") as f:
+                        f.write(story_bytes)
+            except Exception as fb_err:
+                logger.warning(f"Failed to generate fallback image: {fb_err}", exc_info=True)
+
         msg = None
         try:
-            if photo_url:
+            if photo_url or fallback_path:
                 use_caption = len(text) <= CAPTION_LIMIT
 
                 async def _send_photo_inner(photo_source) -> bool:
@@ -567,33 +605,39 @@ class ContentScheduler:
                     return True
 
                 photo_sent = False
-                try:
-                    photo_sent = await _send_photo_inner(photo_url)
-                    logger.info(f"✅ Published {label} photo to {target} (caption={'yes' if use_caption else 'no'})")
-                except Exception as photo_err:
-                    logger.warning(f"Photo send by URL failed ({photo_err}), trying file upload")
+                
+                if fallback_path:
                     try:
-                        headers = {"User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"}
-                        async with aiohttp.ClientSession(headers=headers) as session:
-                            async with session.get(photo_url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                                if resp.status == 200:
-                                    img_bytes = await resp.read()
-                                    if len(img_bytes) > 1000:
-                                        # Convert to JPEG in memory to fix format mismatch
-                                        # (Wikimedia returns PNG/WEBP — Telegram fails if bytes ≠ extension)
-                                        pil_img = PILImage.open(io.BytesIO(img_bytes))
-                                        if pil_img.mode in ('RGBA', 'LA', 'P'):
-                                            pil_img = pil_img.convert('RGB')
-                                        jpeg_buf = io.BytesIO()
-                                        pil_img.save(jpeg_buf, format='JPEG', quality=85)
-                                        jpeg_bytes = jpeg_buf.getvalue()
-                                        if len(jpeg_bytes) > 8 * 1024 * 1024:
-                                            raise ValueError("Image too large for Telegram (>8MB)")
-                                        input_file = BufferedInputFile(jpeg_bytes, filename="photo.jpg")
-                                        photo_sent = await _send_photo_inner(input_file)
-                                        logger.info(f"✅ Published {label} photo (file upload) to {target}")
-                    except Exception as upload_err:
-                        logger.warning(f"Photo file upload also failed ({upload_err}), sending text only")
+                        photo_sent = await _send_photo_inner(FSInputFile(fallback_path))
+                        logger.info(f"✅ Published {label} photo (fallback image) to {target}")
+                    except Exception as fb_err:
+                        logger.warning(f"Fallback photo send failed: {fb_err}")
+                else:
+                    try:
+                        photo_sent = await _send_photo_inner(photo_url)
+                        logger.info(f"✅ Published {label} photo to {target} (caption={'yes' if use_caption else 'no'})")
+                    except Exception as photo_err:
+                        logger.warning(f"Photo send by URL failed ({photo_err}), trying file upload")
+                        try:
+                            headers = {"User-Agent": "IzhevskTodayNewsBot/1.0 (https://t.me/IzhevskTodayNews)"}
+                            async with aiohttp.ClientSession(headers=headers) as session:
+                                async with session.get(photo_url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                                    if resp.status == 200:
+                                        img_bytes = await resp.read()
+                                        if len(img_bytes) > 1000:
+                                            pil_img = PILImage.open(io.BytesIO(img_bytes))
+                                            if pil_img.mode in ('RGBA', 'LA', 'P'):
+                                                pil_img = pil_img.convert('RGB')
+                                            jpeg_buf = io.BytesIO()
+                                            pil_img.save(jpeg_buf, format='JPEG', quality=85)
+                                            jpeg_bytes = jpeg_buf.getvalue()
+                                            if len(jpeg_bytes) > 8 * 1024 * 1024:
+                                                raise ValueError("Image too large for Telegram (>8MB)")
+                                            input_file = BufferedInputFile(jpeg_bytes, filename="photo.jpg")
+                                            photo_sent = await _send_photo_inner(input_file)
+                                            logger.info(f"✅ Published {label} photo (file upload) to {target}")
+                        except Exception as upload_err:
+                            logger.warning(f"Photo file upload also failed ({upload_err}), sending text only")
 
                 # If text was too long for caption — send as separate message
                 if photo_sent and not use_caption:
@@ -651,7 +695,7 @@ class ContentScheduler:
                 import src.bot as bot_module
                 vk = getattr(bot_module, '_vk_publisher', None)
                 if vk and vk.enabled:
-                    await vk.publish(text, photo_url=photo_url)
+                    await vk.publish(text, photo_url=photo_url, photo_path=fallback_path)
                     logger.info(f"✅ VK crosspost: {label}")
                     
                     # ── Publish VK Story for ALL text-based rubrics ──
