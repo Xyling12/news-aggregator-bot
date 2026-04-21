@@ -1260,89 +1260,83 @@ class AIRewriter:
 
     async def generate_keywords(self, text: str) -> list[str]:
         """Extract keywords from text for stock photo search."""
-        if not self._gemini_model or self._gemini_circuit_open():
-            return self._extract_keywords_fallback(text)
+        if not self._gemini_circuit_open() and self._gemini_model:
+            try:
+                prompt = f"""You help find a stock photo for a news story.
 
-        try:
-            prompt = f"""Ты помогаешь найти подходящее стоковое фото для новости.
+Task: suggest 2-3 ENGLISH keywords for searching a photo on Pexels.
 
-Задача: придумай 2-3 ключевых слова НА АНГЛИЙСКОМ для поиска фото на Pixabay.
+RULES:
+- Keywords must describe a SCENE or PLACE — something photogenic and easy to find on stock sites.
+- Prefer people in a situation, not objects.
+- 2-3 comma-separated phrases.
+- BAD: news, information, bell, abstract, technology, digital, military vehicle, fighter jet
+- GOOD: "airplane cockpit pilot", "soup bowl food", "court justice", "teacher classroom"
 
-ГЛАВНОЕ ПРАВИЛО: ключевые слова должны описывать СЦЕНУ С ЛЮДЬМИ или МЕСТО — то, что фотогенично и легко найти на стоке.
+News text: {text[:500]}
 
-ЗАПРЕЩЕНО использовать:
-- Названия звуков или абстрактных понятий: bell, ring, sound, noise, alarm, signal
-- Абстракции: news, information, article, report, technology, digital, modern
-- Технические объекты, которые плохо смотрятся: pipe, tube, wire, equipment (если не это главная суть)
-- Слова, которые дадут технические фото вместо репортажных
-- ЗАПРЕЩЕНО: military vehicle, air force truck, US army, NATO vehicle, warship, fighter jet, missile — иностранная военная техника
+Reply ONLY with comma-separated keywords, no explanations."""
 
-ПРАВИЛА:
-- Описывай ЛЮДЕЙ в СИТУАЦИИ, а не объект (teacher NOT bell, students NOT ring)
-- Используй конкретные сцены: "smiling schoolchildren", "classroom russia", не просто "school"
-- 2-3 слова через запятую
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._gemini_model.generate_content(prompt),
+                )
 
-Примеры:
-- Новость про звонки в школах с песнями → "schoolchildren classroom, students happy school"
-- Новость про строительство спорткомплекса → "sports complex construction, gym building workers"
-- Новость про пожар в доме → "firefighters apartment fire, rescue workers"
-- Новость про зарплаты учителей → "teacher classroom, school education russia"
-- Новость про ремонт дороги → "road construction workers, highway asphalt"
-- Новость про застройщиков мошенников → "fraud court justice, police handcuffs"
-- Новость про погоду / сугробы / снег → "snowy city street, people winter snow" (НЕ "snow tire chains")
-- Новость про больницу/медицину → "doctor hospital patient, medical workers"
-- Новость про БПЛА / опасное небо / угрозу атаки → "school evacuation drill, civil defense warning, children safety" (НЕ "military vehicle, air force")
-- Новость про военное положение/обстрелы → "bomb shelter interior, citizens bunker, safety drill"
+                if response and response.text:
+                    keywords = [kw.strip().lower() for kw in response.text.strip().split(",")]
+                    bad_keywords = {
+                        "news", "information", "article", "report", "update", "story", "newspaper",
+                        "bell", "ring", "sound", "alarm", "signal", "noise", "tone", "ringtone",
+                        "pipe", "tube", "wire", "equipment",
+                        "abstract", "concept", "symbol", "icon", "background", "digital", "modern",
+                        "technology",
+                        "climbing", "sport", "fitness", "gym", "exercise", "athlete", "workout",
+                        "athletic", "mountain", "boulder", "competition", "race", "runner",
+                        "jump", "jumping", "sports", "movement", "motion", "activity",
+                        "military vehicle", "air force", "military truck", "warplane", "fighter jet",
+                        "military aircraft", "warship", "army vehicle", "military equipment",
+                        "missile launcher", "armored vehicle", "military strike", "drone attack",
+                    }
+                    keywords = [kw for kw in keywords if kw and kw not in bad_keywords]
+                    if keywords:
+                        return keywords[:3]
+                    logger.warning("generate_keywords: all Gemini keywords were filtered, using AITUNNEL/fallback")
 
-Ответь ТОЛЬКО словами через запятую, без объяснений.
+            except Exception as e:
+                err_str = str(e).lower()
+                if "400" in err_str and "location" in err_str:
+                    logger.warning(f"Keyword extraction: Gemini geo-blocked, opening circuit breaker")
+                    self._cb_open_until = __import__('time').monotonic() + 7200
+                    self._cb_record_error()
+                else:
+                    logger.error(f"Keyword extraction failed (Gemini): {e}")
 
-Текст: {text[:500]}"""
+        # --- AITUNNEL fallback (works from RU servers) ---
+        if self.config.aitunnel_api_key:
+            try:
+                aitunnel_prompt = (
+                    f"You help find a stock photo for a news story. "
+                    f"Suggest 2-3 English keywords (comma-separated) describing a photogenic SCENE or PLACE. "
+                    f"Examples: 'airplane cockpit pilot', 'hot soup bowl food', 'court justice judge'. "
+                    f"AVOID: news, digital, military vehicle, abstract. "
+                    f"Reply ONLY with comma-separated keywords.\n\nNews: {text[:400]}"
+                )
+                raw = await self._aitunnel_chat(aitunnel_prompt, temperature=0.3, max_tokens=60)
+                if raw:
+                    kws = [kw.strip().lower() for kw in raw.split(",") if kw.strip()]
+                    kws = [kw for kw in kws if len(kw) > 2]
+                    if kws:
+                        logger.info(f"generate_keywords: AITUNNEL fallback OK: {kws}")
+                        return kws[:3]
+            except Exception as e:
+                logger.error(f"Keyword extraction failed (AITUNNEL): {e}")
 
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self._gemini_model.generate_content(prompt),
-            )
-
-            if response and response.text:
-                keywords = [kw.strip().lower() for kw in response.text.strip().split(",")]
-                # Filter out generic/useless/dangerous keywords that lead to wrong photos
-                bad_keywords = {
-                    # Generic/meta
-                    "news", "information", "article", "report", "update", "story", "newspaper",
-                    # Sound/tech objects
-                    "bell", "ring", "sound", "alarm", "signal", "noise", "tone", "ringtone",
-                    "pipe", "tube", "wire", "equipment",
-                    # Abstract/design
-                    "abstract", "concept", "symbol", "icon", "background", "digital", "modern",
-                    "technology",
-                    # Sport/fitness — these get triggered by «движение» (movement/traffic)
-                    "climbing", "sport", "fitness", "gym", "exercise", "athlete", "workout",
-                    "athletic", "mountain", "boulder", "competition", "race", "runner",
-                    "jump", "jumping", "sports", "movement", "motion", "activity",
-                    # Foreign military hardware — causes US/NATO vehicle photos
-                    "military vehicle", "air force", "military truck", "warplane", "fighter jet",
-                    "military aircraft", "warship", "army vehicle", "military equipment",
-                    "missile launcher", "armored vehicle", "military strike", "drone attack",
-                }
-                keywords = [kw for kw in keywords if kw and kw not in bad_keywords]
-                # If AI returned only bad words, fall through to reliable fallback
-                if not keywords:
-                    logger.warning("generate_keywords: all AI keywords were filtered, using fallback")
-                    return self._extract_keywords_fallback(text)
-                return keywords[:3]
-
-        except Exception as e:
-            err_str = str(e).lower()
-            if "400" in err_str and "location" in err_str:
-                logger.warning(f"Keyword extraction: Gemini geo-blocked, opening circuit breaker")
-                self._cb_open_until = __import__('time').monotonic() + 7200
-                self._cb_record_error()
-            else:
-                logger.error(f"Keyword extraction failed: {e}")
-
-        # Fallback: topic-based keyword mapping without AI
+        # --- Static dictionary fallback ---
         return self._extract_keywords_fallback(text)
+
+
+
 
     async def check_photo_relevance(self, news_text: str, photo_url: str) -> bool:
         """Check if a stock photo is relevant to the given news text using Gemini vision.
@@ -1470,6 +1464,12 @@ class AIRewriter:
         """
         text_lower = text.lower()
         topic_map = [
+            # Aviation / airline
+            (["авиа", "самолёт", "самолет", "аэропорт", "рейс", "авиакомпани", "пилот", "борт"],
+             ["airplane cockpit pilot", "aircraft airport", "airline boarding"]),
+            # Food / recipe
+            (["рецепт", "блюдо", "суп", "щи", "борщ", "еда", "приготовл", "кулинар", "вкусн"],
+             ["homemade soup bowl", "food cooking kitchen", "delicious meal"]),
             # Emergency / rescue — check first, very specific
             (["спасен", "спасатель", "пропав", "застрял", "поиск"],
              ["rescue", "search rescue", "emergency team"]),
@@ -1481,7 +1481,7 @@ class AIRewriter:
              ["civil defense siren", "school evacuation", "safety warning"]),
             (["полиция", "задержан", "арест", "преступ"],
              ["police", "law enforcement", "justice"]),
-            # Nature / weather — before hospital so «осмотрели в больнице» doesn't win
+            # Nature / weather
             (["снег", "мороз", "пурга", "метель", "снежн"],
              ["winter", "snow", "blizzard"]),
             (["погода", "дождь", "гроза", "оттепел", "похолодан"],
@@ -1491,28 +1491,31 @@ class AIRewriter:
              ["construction", "road", "workers"]),
             (["жкх", "коммунал", "отоплен", "водоснабжен"],
              ["city infrastructure", "heating", "utilities"]),
-            (["транспорт", "автобус", "трамвай"],
-             ["public transport", "bus", "city"]),
+            (["транспорт", "автобус", "трамвай", "маршрут"],
+             ["public transport", "bus", "city street"]),
             # Society
             (["школ", "образован", "учител", "студент"],
              ["school", "education", "classroom"]),
             (["больниц", "медицин", "врач", "хирург"],
              ["hospital", "doctor", "healthcare"]),
-            (["экономик", "цен", "рубл", "инфляц", "зарплат"],
+            (["экономик", "цен", "рубл", "инфляц", "зарплат", "инвестиц", "бюджет"],
              ["economy", "finance", "money"]),
             (["суд", "закон", "право"],
              ["court", "justice", "law"]),
             (["спорт", "матч", "команд", "чемпион"],
              ["sport", "competition", "athletes"]),
-            # Geopolitics — use neutral visuals, NOT foreign military equipment
+            # Geopolitics
             (["армия", "воен", "солдат", "флот", "вмс", "нато"],
              ["government meeting", "security officials", "ministry building"]),
             (["нефт", "газ", "топлив", "энерг"],
              ["oil", "gas", "energy"]),
-            (["выбор", "политик", "депутат", "власт"],
+            (["выбор", "политик", "депутат", "власт", "мэр", "чиновник"],
              ["politics", "government", "parliament"]),
             (["технолог", "цифров", "интернет"],
              ["technology", "digital", "innovation"]),
+            # Retail / market
+            (["магазин", "торговл", "рынок", "продаж"],
+             ["market", "shop", "retail"]),
         ]
         # Score each topic by number of keyword hits
         best_score = 0
