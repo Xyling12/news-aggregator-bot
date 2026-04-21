@@ -210,7 +210,7 @@ class VKPublisher:
             params = self._normalize_wall_target(raw_target)
             params.update({"count": max(3, min(20, scan_limit)), "filter": "owner"})
             wall = await self._api_call("wall.get", _token_override=self.user_token, **params)
-            await asyncio.sleep(0.4)  # VK rate limit: max ~3 req/sec; avoid app block (code=8)
+            await asyncio.sleep(2.0)  # VK rate limit: increased to 2s to prevent app block (code=8) with 7 targets
             if not wall or "items" not in wall:
                 continue
 

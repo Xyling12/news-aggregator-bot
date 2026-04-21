@@ -1014,7 +1014,7 @@ class AIRewriter:
         try:
             timeout = aiohttp.ClientTimeout(total=45)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload, headers=headers) as resp:
+                async with session.post(url, json=payload, headers=headers, ssl=False) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         choices = data.get("choices", [])
