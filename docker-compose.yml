@@ -28,26 +28,6 @@ services:
     networks:
       - dokploy-network
 
-  # ── VK контент-бот для vk.com/grandtransfer (межгород тематика) ──────────
-  grandtransfer-bot:
-    image: ghcr.io/xyling12/news-aggregator-bot:main
-    pull_policy: always
-    container_name: grandtransfer-bot
-    restart: unless-stopped
-    command: python grandtransfer_main.py
-    volumes:
-      - gt_data:/app/data
-      - gt_media:/app/media
-    environment:
-      # VK токен группы grandtransfer (отдельный от Ижевска)
-      - VK_ACCESS_TOKEN_GT=vk1.a.GzoxUOdyMSMZ48ihLborDA3JAefqzqF4lf218S8rwGIbvu94Z8qnxztrHPgHlYAeE0kdXNMqJFWIiksBXAFitRE1aqL7fo5fjikH3ph2HdqOTs8a39LGws50TcNdrRJYzfnHi9zpfQ9bmWYK7NilZrGPMj-ZCWugK0_nYg1xbWDE0maM2jqA6fCOrTTd3gtczLwbiWu8_-IoQz48L0yrJA
-      - VK_GROUP_ID_GT=218903564
-      - AITUNNEL_API_KEY=sk-aitunnel-GEhq2XTu9QmIrrOZe2S1Di2WAdp7yQ0C
-      - AITUNNEL_MODEL=gpt-4o-mini
-      - PEXELS_API_KEY=I71vTtRmVcODHWvBFyXjviye6s7c0WdrOIILXo3O4iXiArXCuVLONb5l
-    networks:
-      - dokploy-network
-
 networks:
   dokploy-network:
     external: true
@@ -55,5 +35,3 @@ networks:
 volumes:
   bot_data:
   bot_media:
-  gt_data:
-  gt_media:
