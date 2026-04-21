@@ -240,17 +240,16 @@ class MediaProcessor:
                         logger.debug(f"Wikimedia: skipping bad filename {page.get('title', '')}")
                         continue
 
-                    # Require high resolution — no old scans or small photos
+                    # Require reasonable resolution — no thumbnails or old scans
                     width = info.get("width", 0)
                     height = info.get("height", 0)
-                    if width < 1200 or height < 700:
+                    if width < 800 or height < 500:
                         logger.debug(f"Wikimedia: skipping low-res {width}x{height}")
                         continue
 
-                    # Require landscape orientation (width > height * 0.6)
-                    # — portrait shots of signs/plaques filtered out
-                    if height > 0 and width / height < 0.8:
-                        logger.debug(f"Wikimedia: skipping portrait-oriented {width}x{height}")
+                    # Filter out extreme portrait (tall narrow) shots only
+                    if height > 0 and width / height < 0.5:
+                        logger.debug(f"Wikimedia: skipping extreme portrait {width}x{height}")
                         continue
 
                     # Extract author and description from extmetadata
