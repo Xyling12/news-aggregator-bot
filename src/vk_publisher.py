@@ -9,6 +9,7 @@ import re
 import os
 import tempfile
 import random
+import time
 from typing import Optional
 
 import aiohttp
@@ -18,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 class VKPublisher:
     """Publishes posts to a VKontakte community (group/public page)."""
+
+    # Class-level circuit breaker: when VK blocks the app (code=8),
+    # all API calls are paused until this timestamp.
+    _blocked_until: float = 0.0
+    _BLOCK_COOLDOWN_SECONDS: int = 7200  # 2 hours
 
     API_VERSION = "5.199"
     API_BASE = "https://api.vk.com/method"
@@ -258,6 +264,14 @@ class VKPublisher:
         Distinguishes between network-level errors (no connectivity / timeout)
         and VK API-level errors (bad token, access denied, quota exceeded).
         """
+        # Circuit breaker: skip all calls while app is blocked
+        remaining = VKPublisher._blocked_until - time.time()
+        if remaining > 0:
+            logger.debug(
+                f"VK API [{method}] skipped — app blocked, retry in {int(remaining // 60)}m"
+            )
+            return None
+
         session = await self._get_session()
 
         # Allow overriding the token (e.g. user token for photo uploads)
@@ -279,6 +293,17 @@ class VKPublisher:
                     error = data["error"]
                     error_code = error.get("error_code")
                     error_msg = error.get("error_msg", "unknown")
+
+                    # code=8: VK blocked the entire application — pause all calls
+                    if error_code == 8:
+                        VKPublisher._blocked_until = time.time() + VKPublisher._BLOCK_COOLDOWN_SECONDS
+                        logger.error(
+                            f"VK APPLICATION BLOCKED (code=8) on [{method}] — "
+                            f"all VK API calls paused for {VKPublisher._BLOCK_COOLDOWN_SECONDS // 3600}h. "
+                            f"Unblock at: https://vk.com/apps?act=manage"
+                        )
+                        return None
+
                     # Provide actionable context based on known VK error codes
                     if error_code == 27:
                         if method.startswith("photos."):
@@ -467,6 +492,11 @@ class VKPublisher:
             attachment = await self._upload_photo(photo_url or "", photo_path=photo_path)
             if attachment:
                 params["attachments"] = attachment
+            else:
+                logger.warning(
+                    "VK photo upload failed — post will be published without image. "
+                    "Check photos scope on VK_USER_TOKEN and app block status."
+                )
 
         result = await self._api_call("wall.post", **params)
 
