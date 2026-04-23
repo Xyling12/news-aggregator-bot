@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 class VKPublisher:
     """Publishes posts to a VKontakte community (group/public page)."""
 
-    # Class-level circuit breaker: when VK blocks the app (code=8),
-    # all API calls are paused until this timestamp.
-    _blocked_until: float = 0.0
+    # Circuit breaker only for wall.get (outreach scanning).
+    # Blocks only the outreach scan, not wall.post or photo uploads.
+    _outreach_blocked_until: float = 0.0
     _BLOCK_COOLDOWN_SECONDS: int = 7200  # 2 hours
 
     API_VERSION = "5.199"
@@ -264,13 +264,14 @@ class VKPublisher:
         Distinguishes between network-level errors (no connectivity / timeout)
         and VK API-level errors (bad token, access denied, quota exceeded).
         """
-        # Circuit breaker: skip all calls while app is blocked
-        remaining = VKPublisher._blocked_until - time.time()
-        if remaining > 0:
-            logger.debug(
-                f"VK API [{method}] skipped — app blocked, retry in {int(remaining // 60)}m"
-            )
-            return None
+        # Circuit breaker: block only wall.get (outreach scanning)
+        if method == "wall.get":
+            remaining = VKPublisher._outreach_blocked_until - time.time()
+            if remaining > 0:
+                logger.debug(
+                    f"VK wall.get skipped — outreach blocked, retry in {int(remaining // 60)}m"
+                )
+                return None
 
         session = await self._get_session()
 
@@ -294,14 +295,20 @@ class VKPublisher:
                     error_code = error.get("error_code")
                     error_msg = error.get("error_msg", "unknown")
 
-                    # code=8: VK blocked the entire application — pause all calls
+                    # code=8: VK blocked this method
                     if error_code == 8:
-                        VKPublisher._blocked_until = time.time() + VKPublisher._BLOCK_COOLDOWN_SECONDS
-                        logger.error(
-                            f"VK APPLICATION BLOCKED (code=8) on [{method}] — "
-                            f"all VK API calls paused for {VKPublisher._BLOCK_COOLDOWN_SECONDS // 3600}h. "
-                            f"Unblock at: https://vk.com/apps?act=manage"
-                        )
+                        if method == "wall.get":
+                            VKPublisher._outreach_blocked_until = time.time() + VKPublisher._BLOCK_COOLDOWN_SECONDS
+                            logger.error(
+                                f"VK outreach BLOCKED (code=8) — wall.get paused for "
+                                f"{VKPublisher._BLOCK_COOLDOWN_SECONDS // 3600}h. "
+                                f"Disable VK_COMPETITOR_COMMENTING_ENABLED to prevent this."
+                            )
+                        else:
+                            logger.error(
+                                f"VK APPLICATION BLOCKED (code=8) on [{method}] — "
+                                f"token may be suspended. Check https://vk.com/apps?act=manage"
+                            )
                         return None
 
                     # Provide actionable context based on known VK error codes
