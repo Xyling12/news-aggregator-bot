@@ -7,12 +7,9 @@ import logging
 import asyncio
 from typing import Optional, Tuple
 
-import google.generativeai as genai
-try:
-    from google.generativeai.types import HarmCategory, HarmBlockThreshold
-    _HAS_SAFETY = True
-except ImportError:
-    _HAS_SAFETY = False
+from google import genai
+from google.genai import types
+_HAS_SAFETY = True  # Always available in google-genai SDK
 import aiohttp
 
 from src.config import Config
@@ -108,15 +105,12 @@ REWRITE_SHORT_PROMPT = """Ты — редактор Telegram-канала "Иж�
 {text}"""
 
 # Safety settings — allow all content (news about accidents/crime gets blocked otherwise)
-if _HAS_SAFETY:
-    SAFETY_SETTINGS = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-else:
-    SAFETY_SETTINGS = None
+SAFETY_SETTINGS = [
+    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+]
 
 # Prompt to check if news is relevant to Izhevsk/Udmurtia readers
 RELEVANCE_PROMPT = """You decide whether a news item fits a regional channel about Izhevsk and Udmurtia.
@@ -197,6 +191,57 @@ REFUSAL_PHRASES = [
 ]
 
 
+class _GenConfig:
+    """Drop-in shim for the old genai.GenerationConfig."""
+    def __init__(self, temperature=None, max_output_tokens=None, top_p=None, top_k=None, **kw):
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
+        self.top_p = top_p
+        self.top_k = top_k
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+class _GeminiWrapper:
+    """Wraps google.genai Client to match the old GenerativeModel interface."""
+
+    def __init__(self, client: "genai.Client", model_name: str):
+        self._client = client
+        self._name = model_name
+
+    def generate_content(self, prompt, generation_config=None, safety_settings=None):
+        cfg_kw: dict = {"safety_settings": safety_settings if safety_settings is not None else SAFETY_SETTINGS}
+        if generation_config is not None:
+            for attr in ("temperature", "max_output_tokens", "top_p", "top_k"):
+                val = getattr(generation_config, attr, None)
+                if val is not None:
+                    cfg_kw[attr] = val
+
+        # Handle multimodal input (list of [text, PIL.Image])
+        if isinstance(prompt, list):
+            parts = []
+            for item in prompt:
+                if isinstance(item, str):
+                    parts.append(types.Part.from_text(text=item))
+                else:
+                    try:
+                        from io import BytesIO
+                        buf = BytesIO()
+                        item.save(buf, format="JPEG")
+                        parts.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"))
+                    except Exception:
+                        pass
+            contents = [types.Content(role="user", parts=parts)]
+        else:
+            contents = prompt
+
+        return self._client.models.generate_content(
+            model=self._name,
+            contents=contents,
+            config=types.GenerateContentConfig(**cfg_kw),
+        )
+
+
 class AIRewriter:
     """Rewrites news text using AI to create unique content."""
 
@@ -227,14 +272,14 @@ class AIRewriter:
         key = keys[self._current_key_index]
         key_num = self._current_key_index + 1
         try:
-            genai.configure(api_key=key)
+            client = genai.Client(api_key=key)
             # Multiple models — each has separate free tier quota
-            model_names = self._resolve_gemini_model_names()
+            model_names = self._resolve_gemini_model_names(client)
             self._gemini_models = []
             for name in model_names:
                 try:
-                    model = genai.GenerativeModel(name)
-                    self._gemini_models.append((name, model))
+                    wrapper = _GeminiWrapper(client, name)
+                    self._gemini_models.append((name, wrapper))
                 except Exception as e:
                     logger.warning(f"Failed to init model {name}: {e}")
 
@@ -305,7 +350,7 @@ class AIRewriter:
                 f"Skipping Gemini for 60 min → YandexGPT/Groq will handle all requests."
             )
 
-    def _resolve_gemini_model_names(self) -> list[str]:
+    def _resolve_gemini_model_names(self, client=None) -> list[str]:
         """Return configured Gemini model ids, filtered against ListModels when possible."""
         requested = self.config.gemini_model_names or DEFAULT_GEMINI_MODEL_NAMES
 
@@ -316,27 +361,28 @@ class AIRewriter:
                 deduped.append(name)
                 seen.add(name)
 
-        try:
-            available = set()
-            for model in genai.list_models():
-                methods = getattr(model, "supported_generation_methods", []) or []
-                if "generateContent" not in methods:
-                    continue
-                model_name = getattr(model, "name", "")
-                if model_name.startswith("models/"):
-                    model_name = model_name.split("/", 1)[1]
-                if model_name:
-                    available.add(model_name)
+        if client:
+            try:
+                available = set()
+                for model in client.models.list():
+                    methods = getattr(model, "supported_generation_methods", []) or []
+                    if "generateContent" not in methods:
+                        continue
+                    model_name = getattr(model, "name", "")
+                    if model_name.startswith("models/"):
+                        model_name = model_name.split("/", 1)[1]
+                    if model_name:
+                        available.add(model_name)
 
-            matched = [name for name in deduped if name in available]
-            missing = [name for name in deduped if name not in available]
-            for name in missing:
-                logger.warning(f"Gemini model not available for generateContent, skipping: {name}")
-            if matched:
-                return matched
-            logger.warning("No configured Gemini models matched ListModels; using requested order without validation")
-        except Exception as e:
-            logger.warning(f"Gemini model validation via list_models failed: {e}")
+                matched = [name for name in deduped if name in available]
+                missing = [name for name in deduped if name not in available]
+                for name in missing:
+                    logger.warning(f"Gemini model not available for generateContent, skipping: {name}")
+                if matched:
+                    return matched
+                logger.warning("No configured Gemini models matched ListModels; using requested order without validation")
+            except Exception as e:
+                logger.warning(f"Gemini model validation via list_models failed: {e}")
 
         return deduped
 
@@ -369,7 +415,7 @@ class AIRewriter:
                 None,
                 lambda: self._gemini_model.generate_content(
                     prompt,
-                    generation_config=genai.GenerationConfig(
+                    generation_config=_GenConfig(
                         temperature=0.1,
                         max_output_tokens=10,
                     ),
@@ -418,7 +464,7 @@ class AIRewriter:
                 None,
                 lambda: self._gemini_model.generate_content(
                     prompt,
-                    generation_config=genai.GenerationConfig(
+                    generation_config=_GenConfig(
                         temperature=0.1,
                         max_output_tokens=10,
                     ),
@@ -592,7 +638,7 @@ class AIRewriter:
                         None,
                         lambda: _model.generate_content(
                             _prompt,
-                            generation_config=genai.GenerationConfig(
+                            generation_config=_GenConfig(
                                 temperature=0.85,
                                 max_output_tokens=2048,
                             ),
@@ -711,7 +757,7 @@ class AIRewriter:
                             None,
                             lambda m=model: m.generate_content(
                                 prompt,
-                                generation_config=genai.GenerationConfig(
+                                generation_config=_GenConfig(
                                     temperature=temperature,
                                     max_output_tokens=2048,
                                 ),
@@ -816,7 +862,7 @@ class AIRewriter:
                     None,
                     lambda: _model.generate_content(
                         _prompt,
-                        generation_config=genai.GenerationConfig(
+                        generation_config=_GenConfig(
                             temperature=0.9,
                             max_output_tokens=2048,
                         ),
@@ -847,7 +893,7 @@ class AIRewriter:
                                 None,
                                 lambda: _model.generate_content(
                                     _sp,
-                                    generation_config=genai.GenerationConfig(temperature=0.95, max_output_tokens=2048),
+                                    generation_config=_GenConfig(temperature=0.95, max_output_tokens=2048),
                                     safety_settings=SAFETY_SETTINGS,
                                 ),
                             )
@@ -1135,7 +1181,7 @@ class AIRewriter:
                 None,
                 lambda: self._gemini_model.generate_content(
                     prompt,
-                    generation_config=genai.GenerationConfig(
+                    generation_config=_GenConfig(
                         temperature=0.2,
                         max_output_tokens=60,
                     ),
@@ -1225,7 +1271,7 @@ class AIRewriter:
                 None,
                 lambda: self._gemini_model.generate_content(
                     prompt,
-                    generation_config=genai.GenerationConfig(
+                    generation_config=_GenConfig(
                         temperature=0.7,
                         max_output_tokens=200,
                     ),
@@ -1381,7 +1427,7 @@ Reply ONLY with comma-separated keywords, no explanations."""
                 None,
                 lambda: self._gemini_model.generate_content(
                     [prompt, img],
-                    generation_config=genai.GenerationConfig(
+                    generation_config=_GenConfig(
                         temperature=0.0,
                         max_output_tokens=5,
                     ),
@@ -1433,7 +1479,7 @@ Reply ONLY with comma-separated keywords, no explanations."""
                 None,
                 lambda: self._gemini_model.generate_content(
                     [prompt, img],
-                    generation_config=genai.GenerationConfig(
+                    generation_config=_GenConfig(
                         temperature=0.0,
                         max_output_tokens=5,
                     ),

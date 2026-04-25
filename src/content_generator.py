@@ -13,19 +13,6 @@ from datetime import datetime
 from typing import Optional, List, Tuple
 
 import aiohttp
-import google.generativeai as genai
-
-try:
-    from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-    SAFETY_SETTINGS = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-except ImportError:
-    SAFETY_SETTINGS = None
 
 from src.config import Config
 

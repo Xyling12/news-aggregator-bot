@@ -12,7 +12,6 @@ from datetime import datetime as dt, timedelta
 from typing import Optional
 
 import aiohttp
-import google.generativeai as genai
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
@@ -329,12 +328,12 @@ async def cmd_test_ai(message: Message):
                 import asyncio as _aio
                 loop = _aio.get_event_loop()
                 name, model = _rewriter._gemini_models[0]
-                import google.generativeai as _genai
+                from src.ai_rewriter import _GenConfig as _GC
                 resp = await loop.run_in_executor(
                     None,
                     lambda: model.generate_content(
                         test_prompt,
-                        generation_config=_genai.GenerationConfig(max_output_tokens=50),
+                        generation_config=_GC(max_output_tokens=50),
                     ),
                 )
                 elapsed = time.monotonic() - t0
@@ -647,9 +646,12 @@ async def cmd_test_gemini(message: Message):
 
     # Check 3: Try actual API call
     try:
-        genai.configure(api_key=_config.gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content("Скажи одно слово: привет")
+        from google import genai as _genai_check
+        _tc = _genai_check.Client(api_key=_config.gemini_api_key)
+        response = _tc.models.generate_content(
+            model="gemini-2.0-flash",
+            contents="Скажи одно слово: привет",
+        )
         if response and response.text:
             lines.append(f"📡 API Call: ✅ OK — '{response.text.strip()[:50]}'")
         else:
