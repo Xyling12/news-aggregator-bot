@@ -753,17 +753,6 @@ class ContentScheduler:
             except Exception as vk_err:
                 logger.warning(f"VK crosspost failed for {label}: {vk_err}")
 
-            # Notify admins
-            for admin_id in self.config.admin_ids:
-                try:
-                    await self.bot.send_message(
-                        admin_id,
-                        f"🤖 Авто-контент опубликован:\n{label}\n\n"
-                        f"📝 {text[:200]}...",
-                        parse_mode=ParseMode.HTML,
-                    )
-                except Exception:
-                    pass
 
         except Exception as e:
             logger.error(f"Failed to publish {label} to {target}: {e}")
