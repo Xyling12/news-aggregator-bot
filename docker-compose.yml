@@ -20,6 +20,7 @@ services:
       - AITUNNEL_MODEL=gpt-4o-mini
       - PEXELS_API_KEY=I71vTtRmVcODHWvBFyXjviye6s7c0WdrOIILXo3O4iXiArXCuVLONb5l
       - PEXELS_PROXY=http://user275577:5s18m2@45.90.197.174:6164
+      - TELEGRAM_PROXY=http://user275577:5s18m2@45.90.197.174:6164
       - VK_USER_TOKEN=vk1.a.eIwwtWBKlKveoEbBvuYbzEl7W_EI_kIhJYuqVPmMRKHpJI9ujqsEF_uRgr5OViVEb-bzfLc0oWR5MIcwhEJXzTGLyM-2eNvdhhjXCyQgLIUyC7QLz-wHJ_q82_hr293nXU6OgsrlCQDPcTSDzTXN11oXhj5jQ_6qGrqTfpUexgIeSvUe8TBWrM902qWIlYA8WMrxQK5G897cFaP0lFIOxQ
     healthcheck:
       test: [ "CMD", "python", "-c", "import os; open('/app/data/bot.db')" ]
