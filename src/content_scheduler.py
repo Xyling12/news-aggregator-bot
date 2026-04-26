@@ -34,20 +34,16 @@ DEFAULT_SCHEDULE = [
     (8,  0,  "holiday",       "🎉 Праздник"),
     (9,  30, "history_fact",  "📅 История"),
     (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
-    (10, 30, "cat_clip",      "😸 Котики 1 (VK Клип)"),
     (11, 0,  "five_facts",    "📌 5 фактов"),
     (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
     (13, 30, "recipe",        "🍽 Рецепт"),
     (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
-    (14, 30, "cat_clip",      "😸 Котики 2 (VK Клип)"),
     (15, 0,  "lifehack",      "💡 Полезно"),
     (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
-    (18, 30, "cat_clip",      "😸 Котики 3 (VK Клип)"),
     (19, 0,  "evening_fun",   "😄 Вечерний"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
     (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
-    (22, 30, "cat_clip",      "😹 Котики 4 (VK Клип)"),
 ]
 
 
