@@ -1794,12 +1794,16 @@ def create_bot(config: Config, db: Database, rewriter: AIRewriter, media_proc: M
     _vk_publisher = vk_pub
     _story_generator = StoryGenerator()
 
-    _proxy_url = os.getenv("TELEGRAM_PROXY", "").strip()
+    # Use TELEGRAM_PROXY if set, fallback to PEXELS_PROXY (same box)
+    _proxy_url = (
+        os.getenv("TELEGRAM_PROXY", "").strip()
+        or os.getenv("PEXELS_PROXY", "").strip()
+    )
     if _proxy_url:
         from aiogram.client.session.aiohttp import AiohttpSession
         session = AiohttpSession(proxy=_proxy_url)
         bot = Bot(token=config.bot_token, session=session)
-        logger.info(f"Aiogram: using proxy {_proxy_url[:30]}...")
+        logger.info(f"Aiogram: using proxy {_proxy_url[:40]}...")
     else:
         bot = Bot(token=config.bot_token)
     _bot = bot
