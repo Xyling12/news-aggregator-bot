@@ -20,7 +20,7 @@ services:
       - AITUNNEL_MODEL=gpt-4o-mini
       - PEXELS_API_KEY=I71vTtRmVcODHWvBFyXjviye6s7c0WdrOIILXo3O4iXiArXCuVLONb5l
       - PEXELS_PROXY=http://user275577:5s18m2@45.90.197.174:6164
-      - VK_USER_TOKEN=vk1.a.B7tY58v8viQM67U3El-xOWTPT03q1_BRLDD4rWZ7CWkoN1fDlX_2xZ60MhhoO3lirTXEgHBx_WzzqPfe3PK99Rj7tyLSIETBLnUR3_KVn0GOvYvqJquiFwkq8t4tAnQbmIIuwo-Kv01Sf2ZW8z4kOWnDN0EB5dsXOZBRlUElZrWRdgF7Wob5cOgn_NnDJu0tG4bDKjTuG8X_Mq36sKksUg
+      - VK_USER_TOKEN=vk1.a.eIwwtWBKlKveoEbBvuYbzEl7W_EI_kIhJYuqVPmMRKHpJI9ujqsEF_uRgr5OViVEb-bzfLc0oWR5MIcwhEJXzTGLyM-2eNvdhhjXCyQgLIUyC7QLz-wHJ_q82_hr293nXU6OgsrlCQDPcTSDzTXN11oXhj5jQ_6qGrqTfpUexgIeSvUe8TBWrM902qWIlYA8WMrxQK5G897cFaP0lFIOxQ
     healthcheck:
       test: [ "CMD", "python", "-c", "import os; open('/app/data/bot.db')" ]
       interval: 60s
