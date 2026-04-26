@@ -691,7 +691,18 @@ class ContentScheduler:
                 import src.bot as bot_module
                 vk = getattr(bot_module, '_vk_publisher', None)
                 if vk and vk.enabled:
-                    await vk.publish(text, photo_url=photo_url, photo_path=fallback_path)
+                    # Download Pexels/CDN photo locally first — VK can't fetch them directly (403/404)
+                    vk_photo_path = fallback_path
+                    if photo_url and not fallback_path:
+                        try:
+                            from src.media_processor import MediaProcessor as _MP
+                            _mp = _MP(media_dir=self.config.media_dir)
+                            _local = await _mp.download_stock_photo(photo_url, f"vk_{rubric}_{int(asyncio.get_event_loop().time())}.jpg")
+                            if _local:
+                                vk_photo_path = _local
+                        except Exception as _dl_err:
+                            logger.warning(f"VK photo pre-download failed: {_dl_err}")
+                    await vk.publish(text, photo_url=photo_url if not vk_photo_path else None, photo_path=vk_photo_path)
                     logger.info(f"✅ VK crosspost: {label}")
                     
                     # ── Publish VK Story for ALL text-based rubrics ──
