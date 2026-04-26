@@ -665,15 +665,20 @@ class MediaProcessor:
             proxy_url = os.getenv("PEXELS_PROXY", "").strip()
             use_proxy = bool(proxy_url and "pexels.com" in photo_url.lower())
 
-            if use_proxy and SOCKS_AVAILABLE and proxy_url.startswith("socks"):
-                connector = ProxyConnector.from_url(proxy_url)
-                session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
+            proxy_kwarg = {}
+            if use_proxy and proxy_url:
+                if proxy_url.startswith("socks") and SOCKS_AVAILABLE:
+                    connector = ProxyConnector.from_url(proxy_url)
+                    session_ctx = aiohttp.ClientSession(connector=connector, headers=headers)
+                else:
+                    session_ctx = aiohttp.ClientSession(headers=headers)
+                    proxy_kwarg = {"proxy": proxy_url}
             else:
                 session_ctx = aiohttp.ClientSession(headers=headers)
 
             async with session_ctx as session:
                 async with session.get(
-                    photo_url, timeout=aiohttp.ClientTimeout(total=20)
+                    photo_url, timeout=aiohttp.ClientTimeout(total=20), **proxy_kwarg
                 ) as resp:
                     if resp.status == 200:
                         content = await resp.read()
