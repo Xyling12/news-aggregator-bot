@@ -361,16 +361,19 @@ class VKPublisher:
 
         # Step 1: Get upload server URL (requires user token with 'photos' scope)
         photo_token = self.user_token or self.access_token
+        logger.info(f"VK photo upload: using token prefix {photo_token[:20]}...")
         upload_server = await self._api_call(
             "photos.getWallUploadServer",
             group_id=int(self.group_id),
             _token_override=photo_token,
         )
         if not upload_server:
+            logger.error("VK photo: photos.getWallUploadServer returned None — check token 'photos' scope")
             return None
 
         upload_url = upload_server.get("upload_url")
         if not upload_url:
+            logger.error(f"VK photo: no upload_url in response: {upload_server}")
             return None
 
         # Step 2: Get photo bytes — from local file or by downloading from URL

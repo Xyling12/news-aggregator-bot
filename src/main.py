@@ -144,7 +144,15 @@ async def main():
 
         # Run Aiogram bot (this is the main event loop)
         logger.info("Starting Aiogram polling...")
-        await dp.start_polling(bot, close_bot_session=False)
+        while True:
+            try:
+                await dp.start_polling(bot, close_bot_session=False)
+                break  # clean stop (KeyboardInterrupt propagated as CancelledError)
+            except asyncio.CancelledError:
+                break
+            except Exception as poll_err:
+                logger.warning(f"Polling error ({type(poll_err).__name__}): {poll_err} — restarting in 10s")
+                await asyncio.sleep(10)
 
     except KeyboardInterrupt:
         logger.info("Shutting down (KeyboardInterrupt)")
