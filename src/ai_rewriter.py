@@ -554,8 +554,17 @@ class AIRewriter:
 Допустимые тематические: #экономика #здоровье #образование #транспорт #жкх #общество #закон #технологии #политика
 
 ДЕЙСТВИЕ 3 — КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФОТО (на английском):
-2-3 слова для поиска стокового фото. Описывай ЛЮДЕЙ в СИТУАЦИИ (не абстракции, не «news», не «technology»).
-Примеры: "schoolchildren classroom", "doctor hospital patient", "road construction workers"
+2-3 конкретных слова для поиска стокового фото на Pexels. Правила:
+- Описывай конкретный ОБЪЕКТ или МЕСТО из новости (не людей в абстракции)
+- Для транспорта: "airplane airport runway", "car accident road", "bus city street"
+- Для медицины: "hospital doctor", "ambulance emergency"
+- Для строительства: "construction workers building", "road repair"
+- Для чиновников/власти: "government building city hall", "official meeting"
+- Для аварий/ЧП: "fire truck emergency", "police car street"
+- Для экономики: "money coins bills", "store prices supermarket"
+- НЕЛЬЗЯ: абстрактные слова (news, information, technology, concept, modern, digital)
+- НЕЛЬЗЯ: животные если новость не про животных
+- НЕЛЬЗЯ: природа если новость не про природу
 
 ФОРМАТ ОТВЕТА (строго, ничего лишнего кроме этих блоков):
 РЕРАЙТ:
@@ -607,6 +616,10 @@ class AIRewriter:
                             "abstract", "concept", "technology", "digital", "modern",
                             "bell", "ring", "sound", "alarm", "signal",
                             "sport", "fitness", "gym", "workout", "climbing",
+                            "nature", "forest", "animal", "bird", "wildlife",
+                            "landscape", "mountain", "ocean", "sea", "river",
+                            "background", "texture", "pattern", "wallpaper",
+                            "russia", "city", "urban", "street",
                         }
                         photo_keywords = [
                             kw.strip().lower()
@@ -680,6 +693,10 @@ class AIRewriter:
                                 "abstract", "concept", "technology", "digital", "modern",
                                 "bell", "ring", "sound", "alarm", "signal",
                                 "sport", "fitness", "gym", "workout", "climbing",
+                                "nature", "forest", "animal", "bird", "wildlife",
+                                "landscape", "mountain", "ocean", "sea", "river",
+                                "background", "texture", "pattern", "wallpaper",
+                                "russia", "city", "urban", "street",
                             }
                             photo_keywords = [
                                 kw.strip().lower()
