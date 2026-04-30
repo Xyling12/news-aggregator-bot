@@ -555,16 +555,19 @@ class AIRewriter:
 
 ДЕЙСТВИЕ 3 — КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФОТО (на английском):
 2-3 конкретных слова для поиска стокового фото на Pexels. Правила:
-- Описывай конкретный ОБЪЕКТ или МЕСТО из новости (не людей в абстракции)
-- Для транспорта: "airplane airport runway", "car accident road", "bus city street"
-- Для медицины: "hospital doctor", "ambulance emergency"
-- Для строительства: "construction workers building", "road repair"
-- Для чиновников/власти: "government building city hall", "official meeting"
-- Для аварий/ЧП: "fire truck emergency", "police car street"
-- Для экономики: "money coins bills", "store prices supermarket"
-- НЕЛЬЗЯ: абстрактные слова (news, information, technology, concept, modern, digital)
-- НЕЛЬЗЯ: животные если новость не про животных
-- НЕЛЬЗЯ: природа если новость не про природу
+- Описывай конкретный ОБЪЕКТ или МЕСТО из новости
+- Для транспорта: "airplane airport runway", "car accident road"
+- Для медицины: "hospital building", "ambulance emergency"
+- Для строительства: "construction site crane", "road repair asphalt"
+- Для чиновников/власти: "government building", "city hall facade"
+- Для аварий/ЧП/пожаров: "fire truck emergency", "police car"
+- Для экономики/цен: "supermarket shelves", "cash money"
+- Для дронов/БПЛА/военного: "military drone", "air defense radar"
+- Для образования: "school classroom", "university building"
+- Для ЖКХ/коммуналки: "apartment building exterior", "heating pipes"
+- СТРОГО НЕЛЬЗЯ: люди с едой, повара, рестораны — если новость не про еду/общепит
+- СТРОГО НЕЛЬЗЯ: абстракции (news, information, technology, concept, digital)
+- СТРОГО НЕЛЬЗЯ: животные, природа, пейзажи — если новость не про это
 
 ФОРМАТ ОТВЕТА (строго, ничего лишнего кроме этих блоков):
 РЕРАЙТ:
@@ -620,6 +623,9 @@ class AIRewriter:
                             "landscape", "mountain", "ocean", "sea", "river",
                             "background", "texture", "pattern", "wallpaper",
                             "russia", "city", "urban", "street",
+                            "food", "cook", "chef", "restaurant", "meal", "dish",
+                            "coffee", "cafe", "kitchen", "cooking", "eating",
+                            "smile", "happy", "people", "person", "man", "woman",
                         }
                         photo_keywords = [
                             kw.strip().lower()
