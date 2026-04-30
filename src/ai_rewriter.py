@@ -563,6 +563,8 @@ class AIRewriter:
 - Для аварий/ЧП/пожаров: "fire truck emergency", "police car"
 - Для экономики/цен: "supermarket shelves", "cash money"
 - Для дронов/БПЛА/военного: "military drone", "air defense radar"
+- Для сирен/тревог/оповещений: "emergency alert siren", "civil defense warning"
+- Для соцсетей/обсуждений в интернете: используй ТЕМУ обсуждения, не "social media"
 - Для образования: "school classroom", "university building"
 - Для ЖКХ/коммуналки: "apartment building exterior", "heating pipes"
 - СТРОГО НЕЛЬЗЯ: люди с едой, повара, рестораны — если новость не про еду/общепит
@@ -622,10 +624,12 @@ class AIRewriter:
                             "nature", "forest", "animal", "bird", "wildlife",
                             "landscape", "mountain", "ocean", "sea", "river",
                             "background", "texture", "pattern", "wallpaper",
-                            "russia", "city", "urban", "street",
+                            "russia", "city", "urban", "street", "traffic", "cars",
                             "food", "cook", "chef", "restaurant", "meal", "dish",
                             "coffee", "cafe", "kitchen", "cooking", "eating",
                             "smile", "happy", "people", "person", "man", "woman",
+                            "social media", "phone", "smartphone", "internet",
+                            "siren", "sound", "noise", "discussion", "social",
                         }
                         photo_keywords = [
                             kw.strip().lower()
