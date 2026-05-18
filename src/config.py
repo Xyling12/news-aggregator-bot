@@ -68,7 +68,7 @@ class Config:
     vk_seo_enabled: bool = True
     vk_seo_max_tags: int = 9
     vk_self_comment_enabled: bool = False
-    use_source_media: bool = False
+    use_source_media: bool = True
     vk_competitor_commenting_enabled: bool = False
     vk_competitor_targets: List[str] = field(default_factory=list)
     vk_competitor_keywords: List[str] = field(default_factory=list)
@@ -183,7 +183,7 @@ class Config:
             vk_seo_enabled=_env_bool("VK_SEO_ENABLED", True),
             vk_seo_max_tags=max(3, min(15, int(os.getenv("VK_SEO_MAX_TAGS", "9")))),
             vk_self_comment_enabled=_env_bool("VK_SELF_COMMENT_ENABLED", False),
-            use_source_media=_env_bool("USE_SOURCE_MEDIA", False),
+            use_source_media=_env_bool("USE_SOURCE_MEDIA", True),
             vk_competitor_commenting_enabled=_env_bool("VK_COMPETITOR_COMMENTING_ENABLED", False),
             vk_competitor_targets=_split_csv("VK_COMPETITOR_TARGETS"),
             vk_competitor_keywords=_split_csv("VK_COMPETITOR_KEYWORDS"),
