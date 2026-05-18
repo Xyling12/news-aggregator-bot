@@ -110,6 +110,13 @@ class MediaProcessor:
           2. Pixabay — free API, good variety
           3. Wikimedia Commons — free, no key, last resort
         """
+        # Add geographic context if not already present — prevents returning
+        # African/European/Asian images for Russian regional news
+        geo_terms = {"russia", "winter", "russian", "siberia", "moscow", "izhevsk"}
+        kw_text = " ".join(keywords).lower()
+        if keywords and not any(t in kw_text for t in geo_terms):
+            keywords = [keywords[0] + " russia"] + keywords[1:]
+
         results = await self._search_pexels(keywords, count)
         if not results:
             results = await self._search_pixabay(keywords, count)

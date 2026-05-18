@@ -556,20 +556,21 @@ class AIRewriter:
 ДЕЙСТВИЕ 3 — КЛЮЧЕВЫЕ СЛОВА ДЛЯ ФОТО (на английском):
 2-3 конкретных слова для поиска стокового фото на Pexels. Правила:
 - Описывай конкретный ОБЪЕКТ или МЕСТО из новости
-- Для транспорта: "airplane airport runway", "car accident road"
-- Для медицины: "hospital building", "ambulance emergency"
-- Для строительства: "construction site crane", "road repair asphalt"
-- Для чиновников/власти: "government building", "city hall facade"
-- Для аварий/ЧП/пожаров: "fire truck emergency", "police car"
-- Для экономики/цен: "supermarket shelves", "cash money"
-- Для дронов/БПЛА/военного: "military drone", "air defense radar"
-- Для сирен/тревог/оповещений: "emergency alert siren", "civil defense warning"
-- Для соцсетей/обсуждений в интернете: используй ТЕМУ обсуждения, не "social media"
-- Для образования: "school classroom", "university building"
-- Для ЖКХ/коммуналки: "apartment building exterior", "heating pipes"
+- ОБЯЗАТЕЛЬНО добавляй "russia" или "winter" для нейтральных сцен — это исключает африканские, азиатские, американские и европейские здания
+- Для транспорта/автобусов: "russian intercity bus road", "bus station winter russia"
+- Для медицины: "russian hospital building exterior", "ambulance winter russia"
+- Для строительства: "construction site crane russia", "road repair workers russia"
+- Для чиновников/власти/суда: "russian official meeting room", "court hearing russia", "arbitration court russia"
+- Для аварий/ЧП/пожаров: "fire truck winter russia", "emergency services russia"
+- Для экономики/цен/долгов: "russian apartment building heating", "utility bills russia"
+- Для дронов/БПЛА/военного: "military drone surveillance", "air defense system"
+- Для ЖКХ/коммуналки/теплоснабжения: "district heating plant russia", "heating radiator apartment"
+- Для образования: "russian school classroom", "university lecture hall russia"
+- Для полиции/правоохранителей: "russian police officer", "police patrol russia"
 - СТРОГО НЕЛЬЗЯ: люди с едой, повара, рестораны — если новость не про еду/общепит
 - СТРОГО НЕЛЬЗЯ: абстракции (news, information, technology, concept, digital)
 - СТРОГО НЕЛЬЗЯ: животные, природа, пейзажи — если новость не про это
+- СТРОГО НЕЛЬЗЯ: просто "government building" или "city hall" без "russia" — вернёт европейские/американские здания
 
 ФОРМАТ ОТВЕТА (строго, ничего лишнего кроме этих блоков):
 РЕРАЙТ:
@@ -624,7 +625,6 @@ class AIRewriter:
                             "nature", "forest", "animal", "bird", "wildlife",
                             "landscape", "mountain", "ocean", "sea", "river",
                             "background", "texture", "pattern", "wallpaper",
-                            "russia", "city", "urban", "street", "traffic", "cars",
                             "food", "cook", "chef", "restaurant", "meal", "dish",
                             "coffee", "cafe", "kitchen", "cooking", "eating",
                             "smile", "happy", "people", "person", "man", "woman",
@@ -706,7 +706,6 @@ class AIRewriter:
                                 "nature", "forest", "animal", "bird", "wildlife",
                                 "landscape", "mountain", "ocean", "sea", "river",
                                 "background", "texture", "pattern", "wallpaper",
-                                "russia", "city", "urban", "street",
                             }
                             photo_keywords = [
                                 kw.strip().lower()
