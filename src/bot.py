@@ -76,6 +76,11 @@ _bot: Optional[Bot] = None
 # Rate limiting: max 3 concurrent AI calls to avoid Gemini 429 errors
 _ai_semaphore = asyncio.Semaphore(3)
 
+# Global dedup set for stock photo URLs — prevents same image appearing on multiple posts
+# published in quick succession (parallel processing race condition)
+_used_stock_urls: set[str] = set()
+_used_stock_urls_lock = asyncio.Lock()
+
 LOCAL_GEO_KEYWORDS = [
     "удмурт",
     "ижевск",
@@ -1314,11 +1319,12 @@ async def _publish_post(post: dict) -> bool:
                 caption=text[:1024],
                 parse_mode=ParseMode.HTML,
             )
-        elif post["media_type"] == "photo":
+        elif post["media_type"] in ("photo", "video"):
+            # For video posts, media_local_path is the video thumbnail (background-image)
             photo_source = None
             if media_path and os.path.exists(media_path):
                 photo_source = FSInputFile(media_path)
-            elif media_url:
+            elif media_url and post["media_type"] == "photo":
                 photo_source = media_url
 
             if photo_source:
@@ -1478,6 +1484,27 @@ async def process_new_post(post_id: int):
         "подписаться в vk", "подписаться в тг", "подписаться в tg",
         "прислать новость", "telegram заблокируют", "телеграм заблокируют",
         "не реклама!!!", "не реклама!", "это не реклама",
+        # Медицинские/клиника/роды-реклама
+        "принимаем роды", "платные роды", "роды под контролем",
+        "запишитесь на приём", "запишитесь к врачу", "онлайн запись",
+        "акция для пациентов", "бесплатная консультация врача",
+        "звоните нам", "наш номер телефона", "обращайтесь к нам",
+        # Недвижимость/строительство-реклама
+        "звоните и приезжайте", "позвоните нам", "наши менеджеры",
+        "оставьте заявку", "заполните форму", "получите скидку",
+        "узнайте подробности", "узнайте цену", "узнайте стоимость",
+        # Общие рекламные паттерны
+        "переходите по ссылке", "перейдите по ссылке", "нажмите на ссылку",
+        "ссылка в шапке профиля", "ссылка в описании", "ссылка в bio",
+        "пишите в директ", "пишите в лс", "написать в директ",
+        "⬇️ подробнее", "👇 подробнее", "👇 жми",
+        # Ресторанные/развлекательные акции
+        "специальное предложение", "день суши", "день пиццы", "день бургер",
+        "роллов всего за", "роллов за", "пицц за", "бургеров за",
+        "в программе — специальное", "акция:", "акция!", "акция в ",
+        "сертификат на скидку", "дарим скидку", "скидка именинникам",
+        "бронируйте столик", "забронировать столик", "бронируй стол",
+        "happy hour", "хэппи аур", "business lunch", "бизнес-ланч от",
     ]
     if any(w in text_lower for w in _HARD_AD_WORDS):
         await _db.update_post_status(post_id, "rejected")
@@ -1638,13 +1665,12 @@ async def process_new_post(post_id: int):
         stock_url = None
         has_original_clean = (
             bool(_config.use_source_media)
-            and
-            post["media_type"] == "photo"
+            and post["media_type"] in ("photo", "video")
             and post.get("media_local_path")
             and not post.get("has_watermark")
         )
 
-        if post["media_type"] == "photo" and post.get("media_local_path") and _config.use_source_media:
+        if post["media_type"] in ("photo", "video") and post.get("media_local_path") and _config.use_source_media:
             # Best-effort detector in addition to DB watermark flag.
             detected, confidence = _media_processor.detect_watermark(post["media_local_path"])
             if detected and confidence >= 0.25:
@@ -1665,15 +1691,26 @@ async def process_new_post(post_id: int):
                 stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
 
                 if stock_photos:
-                    # Take FIRST result — Pexels/Wikimedia already sorts by relevance.
-                    # kw_match is used only for logging — NOT as a barrier.
-                    # Wikimedia often has empty descriptions, causing false "mismatch".
-                    best = stock_photos[0]
-                    desc = best.get("description", "")
+                    # Take first result not already used globally (dedup across parallel posts)
+                    async with _used_stock_urls_lock:
+                        chosen = None
+                        for candidate in stock_photos:
+                            url = candidate.get("url", "")
+                            if url and url not in _used_stock_urls:
+                                chosen = candidate
+                                _used_stock_urls.add(url)
+                                # Keep set bounded to last 500 entries
+                                if len(_used_stock_urls) > 500:
+                                    _used_stock_urls.pop()
+                                break
+                        if not chosen:
+                            chosen = stock_photos[0]  # All used → reuse first as fallback
+
+                    desc = chosen.get("description", "")
                     kw_match = any(kw.lower() in desc.lower() for kw in keywords[:3]) if desc else False
-                    stock_url = best["url"]
+                    stock_url = chosen["url"]
                     logger.info(
-                        f"Post #{post_id}: stock photo selected from {best.get('source', 'unknown')} "
+                        f"Post #{post_id}: stock photo selected from {chosen.get('source', 'unknown')} "
                         f"(kw_match={kw_match}, keywords={keywords[:3]})"
                     )
                 else:
