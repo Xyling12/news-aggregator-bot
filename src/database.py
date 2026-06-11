@@ -86,6 +86,15 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_generated_history_rubric ON generated_history(rubric);
         """)
         await self._db.commit()
+        # Migration: add columns that may not exist in older DBs
+        for migration_sql in [
+            "ALTER TABLE posts ADD COLUMN media_extra_paths TEXT DEFAULT NULL",
+        ]:
+            try:
+                await self._db.execute(migration_sql)
+                await self._db.commit()
+            except Exception:
+                pass  # Column already exists
 
     # ── Sources ──────────────────────────────────────────────────────────
 
@@ -141,14 +150,15 @@ class Database:
         media_type: str = "none",
         media_file_id: str = None,
         media_local_path: str = None,
+        media_extra_paths: str = None,
     ) -> Optional[int]:
         """Add a new post to the queue. Returns post ID or None if duplicate."""
         try:
             cursor = await self._db.execute(
-                """INSERT INTO posts 
-                   (source_channel, source_message_id, original_text, media_type, media_file_id, media_local_path)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (source_channel, source_message_id, original_text, media_type, media_file_id, media_local_path),
+                """INSERT INTO posts
+                   (source_channel, source_message_id, original_text, media_type, media_file_id, media_local_path, media_extra_paths)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (source_channel, source_message_id, original_text, media_type, media_file_id, media_local_path, media_extra_paths),
             )
             await self._db.commit()
             return cursor.lastrowid

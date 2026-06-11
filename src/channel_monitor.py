@@ -4,6 +4,7 @@ No Telethon, no API keys, no user session needed.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -135,14 +136,29 @@ class ChannelMonitor:
             media_url = post.get("media_url")
             media_local_path = None
 
-            # Download photo if available
-            if media_type == "photo" and media_url:
+            # Download primary photo / video thumbnail
+            # For video posts, media_url is the background-image thumbnail (not the MP4)
+            if media_url and media_type in ("photo", "video"):
                 try:
                     media_local_path = await self._download_media(
                         media_url, channel_username, msg_id
                     )
                 except Exception as e:
                     logger.error(f"Media download failed: {e}")
+
+            # Download extra photos from album posts
+            extra_media_urls = post.get("extra_media_urls", [])
+            extra_local_paths = []
+            for idx, extra_url in enumerate(extra_media_urls[:9]):  # max 10 total
+                try:
+                    extra_path = await self._download_media(
+                        extra_url, channel_username, f"{msg_id}_x{idx+1}"
+                    )
+                    if extra_path:
+                        extra_local_paths.append(extra_path)
+                except Exception as e:
+                    logger.error(f"Extra media download failed: {e}")
+            media_extra_paths_json = json.dumps(extra_local_paths, ensure_ascii=False) if extra_local_paths else None
 
             # Skip weather forecast posts during morning (6-11 AM) — we generate our own at 7:00
             if self._is_weather_report(text) and 6 <= datetime.now().hour <= 11:
@@ -164,6 +180,7 @@ class ChannelMonitor:
                 media_type=media_type,
                 media_file_id=media_url,  # Store remote URL for fallback
                 media_local_path=media_local_path,
+                media_extra_paths=media_extra_paths_json,
             )
 
             if post_id:
@@ -235,41 +252,47 @@ class ChannelMonitor:
             if not text:
                 continue
 
-            # Detect media
+            # Detect media — collect ALL photo URLs for album posts
             media_type = "none"
-            media_url = None
+            all_photo_urls: List[str] = []
 
-            # Check for photos — 3 patterns in priority order:
-            # 1. background-image: url(...) — single-photo posts
-            # 2. data-media-url="..." — used by some t.me/s/ versions
-            # 3. <img src="..."> inside photo wrap div — album posts
-            photo_match = re.search(
+            # Pattern 1: background-image: url(...) — covers both single and album posts
+            bg_matches = re.findall(
                 r'background-image:\s*url\([\'"]?(https://[^\'"\)]+)[\'"]?\)',
                 block
             )
-            if photo_match:
-                media_type = "photo"
-                media_url = photo_match.group(1)
+            all_photo_urls.extend(bg_matches)
 
-            if media_url is None:
-                data_media_match = re.search(
+            # Pattern 2: data-media-url="..."
+            if not all_photo_urls:
+                data_media_matches = re.findall(
                     r'data-media-url=[\'"]?(https://[^\'"\s>]+)',
                     block
                 )
-                if data_media_match:
-                    media_type = "photo"
-                    media_url = data_media_match.group(1)
+                all_photo_urls.extend(data_media_matches)
 
-            if media_url is None:
-                # Album posts render photos as <img> inside photo-wrap divs
-                img_match = re.search(
+            # Pattern 3: <img src="..."> inside cdn.telegram.org (album posts)
+            if not all_photo_urls:
+                img_matches = re.findall(
                     r'<img[^>]+src=[\'"]?(https://cdn(?:\d+)?\.telegram\.org/[^\'"\s>]+)',
                     block,
                     re.IGNORECASE,
                 )
-                if img_match:
-                    media_type = "photo"
-                    media_url = img_match.group(1)
+                all_photo_urls.extend(img_matches)
+
+            # Deduplicate while preserving order
+            seen: set = set()
+            unique_urls: List[str] = []
+            for u in all_photo_urls:
+                if u not in seen:
+                    seen.add(u)
+                    unique_urls.append(u)
+
+            if unique_urls:
+                media_type = "photo"
+
+            media_url = unique_urls[0] if unique_urls else None
+            extra_media_urls = unique_urls[1:] if len(unique_urls) > 1 else []
 
             # Check for videos
             if '<video' in block or 'tgme_widget_message_video' in block:
@@ -280,6 +303,7 @@ class ChannelMonitor:
                 "text": text,
                 "media_type": media_type,
                 "media_url": media_url,
+                "extra_media_urls": extra_media_urls,
             })
 
         return posts

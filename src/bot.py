@@ -1302,6 +1302,18 @@ async def _publish_post(post: dict) -> bool:
     media_url = post.get("media_file_id") if allow_source_media else None
     replacement_url = post.get("replacement_media_url")
 
+    # Collect extra photo paths (album posts)
+    extra_paths: list[str] = []
+    if allow_source_media:
+        raw_extra = post.get("media_extra_paths")
+        if raw_extra:
+            try:
+                parsed = json.loads(raw_extra)
+                if isinstance(parsed, list):
+                    extra_paths = [p for p in parsed if isinstance(p, str) and os.path.exists(p)]
+            except Exception:
+                pass
+
     msg = None
     local_stock: Optional[str] = None  # Will hold local path of downloaded stock photo for VK reuse
 
@@ -1321,19 +1333,34 @@ async def _publish_post(post: dict) -> bool:
             )
         elif post["media_type"] in ("photo", "video"):
             # For video posts, media_local_path is the video thumbnail (background-image)
-            photo_source = None
+            primary_source = None
             if media_path and os.path.exists(media_path):
-                photo_source = FSInputFile(media_path)
+                primary_source = FSInputFile(media_path)
             elif media_url and post["media_type"] == "photo":
-                photo_source = media_url
+                primary_source = media_url
 
-            if photo_source:
-                msg = await _bot.send_photo(
-                    target,
-                    photo=photo_source,
-                    caption=text[:1024],
-                    parse_mode=ParseMode.HTML,
-                )
+            if primary_source:
+                if extra_paths:
+                    # Album post — send all photos as a media group
+                    from aiogram.types import InputMediaPhoto
+                    all_sources = [primary_source] + [FSInputFile(p) for p in extra_paths]
+                    media_group = [
+                        InputMediaPhoto(
+                            media=src,
+                            caption=text[:1024] if i == 0 else None,
+                            parse_mode=ParseMode.HTML if i == 0 else None,
+                        )
+                        for i, src in enumerate(all_sources[:10])
+                    ]
+                    msgs = await _bot.send_media_group(target, media=media_group)
+                    msg = msgs[0] if msgs else None
+                else:
+                    msg = await _bot.send_photo(
+                        target,
+                        photo=primary_source,
+                        caption=text[:1024],
+                        parse_mode=ParseMode.HTML,
+                    )
     except Exception as photo_err:
         logger.warning(
             f"Post #{post['id']}: photo send failed ({photo_err}), falling back to text-only"
