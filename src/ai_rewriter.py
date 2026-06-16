@@ -149,6 +149,20 @@ ENGAGEMENT_PROMPT = """Ты — SMM-редактор паблика «Ижевс
 {text}"""
 
 
+# Prompt to generate a unique, neutral outreach comment for another community's post
+OUTREACH_COMMENT_PROMPT = """Ты — обычный неравнодушный житель Ижевска, читаешь местный паблик. Напиши ОДИН короткий живой комментарий к посту ниже.
+
+Правила:
+- 1 предложение, по-человечески и строго по теме поста.
+- Нейтрально-доброжелательно или с уместным личным мнением. Без негатива, политики, оскорблений.
+- БЕЗ ссылок, БЕЗ рекламы, БЕЗ упоминания других пабликов или каналов.
+- НЕ используй шаблоны вроде «спасибо за информацию» — пиши естественно и по сути.
+- Верни только текст комментария, без кавычек и пояснений.
+
+Пост:
+{text}"""
+
+
 # Phrases that indicate AI refused to process the text (safety/policy filters)
 REFUSAL_PHRASES = [
     "я не могу обсуждать",
@@ -1336,6 +1350,33 @@ class AIRewriter:
 
         return _fallback(text_lower)
 
+
+    async def generate_outreach_comment(self, post_text: str) -> Optional[str]:
+        """Generate a short, unique, neutral comment for another community's post.
+
+        Used for organic outreach growth. No links, no self-promo, no templates —
+        VK flags repetitive/promotional comments, so each one must look human.
+        """
+        if not self.config.aitunnel_api_key or not post_text:
+            return None
+        try:
+            raw = await self._aitunnel_chat(
+                prompt=OUTREACH_COMMENT_PROMPT.format(text=post_text[:1200]),
+                temperature=0.85,
+                max_tokens=120,
+            )
+        except Exception as e:
+            logger.warning(f"Outreach comment generation failed: {e}")
+            return None
+        if not raw:
+            return None
+        comment = raw.strip().strip('"').strip().split("\n")[0].strip()
+        if len(comment) < 8 or len(comment) > 280:
+            return None
+        # Safety: never let a link slip into an outreach comment (ban risk)
+        if any(x in comment.lower() for x in ("http", "t.me", "vk.com", "@")):
+            return None
+        return comment
 
     async def generate_engagement(self, text: str) -> dict:
         """Generate an engaging first-comment and (when appropriate) a VK poll.

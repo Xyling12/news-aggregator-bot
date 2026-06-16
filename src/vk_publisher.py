@@ -24,6 +24,8 @@ class VKPublisher:
     # Blocks only the outreach scan, not wall.post or photo uploads.
     _outreach_blocked_until: float = 0.0
     _BLOCK_COOLDOWN_SECONDS: int = 7200  # 2 hours
+    # Last VK API error code (0 = last call OK). Lets the outreach loop detect bans.
+    _last_error_code: int = 0
 
     API_VERSION = "5.199"
     API_BASE = "https://api.vk.com/method"
@@ -293,6 +295,7 @@ class VKPublisher:
                     error = data["error"]
                     error_code = error.get("error_code")
                     error_msg = error.get("error_msg", "unknown")
+                    VKPublisher._last_error_code = error_code or 0
 
                     # code=8: VK blocked this method
                     if error_code == 8:
@@ -337,6 +340,7 @@ class VKPublisher:
                     )
                     return None
 
+                VKPublisher._last_error_code = 0
                 return data.get("response")
 
         except asyncio.TimeoutError:

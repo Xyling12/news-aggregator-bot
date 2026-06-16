@@ -16,7 +16,7 @@ from src.database import Database
 from src.channel_monitor import ChannelMonitor
 from src.ai_rewriter import AIRewriter
 from src.media_processor import MediaProcessor
-from src.bot import create_bot, process_new_post, auto_publish_loop
+from src.bot import create_bot, process_new_post, auto_publish_loop, vk_outreach_loop
 from src.content_generator import ContentGenerator
 from src.content_scheduler import ContentScheduler
 from src.vk_publisher import VKPublisher
@@ -123,6 +123,7 @@ async def main():
     monitor.on_new_post(process_new_post)
 
     publish_task = None
+    outreach_task = None
     monitor_started = False
 
     try:
@@ -138,6 +139,16 @@ async def main():
         # Start auto-publish scheduler (from queue)
         publish_task = asyncio.create_task(auto_publish_loop())
         logger.info(f"Auto-publisher started (interval: {config.publish_interval}s)")
+
+        # Start VK organic-growth outreach loop (dormant unless enabled + targets set)
+        outreach_task = asyncio.create_task(vk_outreach_loop())
+        if config.vk_competitor_commenting_enabled and config.vk_competitor_targets:
+            logger.info(
+                f"VK outreach started: {len(config.vk_competitor_targets)} targets, "
+                f"{config.vk_competitor_comments_per_day}/day"
+            )
+        else:
+            logger.info("VK outreach loop idle (disabled or no targets configured)")
 
         # Start content scheduler (generates unique content on fixed schedule)
         await content_scheduler.start()
@@ -161,6 +172,8 @@ async def main():
     finally:
         if publish_task:
             publish_task.cancel()
+        if outreach_task:
+            outreach_task.cancel()
         await content_scheduler.stop()
         if monitor_started:
             await monitor.stop()

@@ -1989,6 +1989,134 @@ async def auto_publish_loop():
             await asyncio.sleep(60)
 
 
+# VK error codes that signal a ban/throttle (vs benign "comments closed on that post")
+_VK_BAN_CODES = {5, 8, 9, 29, 214}
+
+
+async def _alert_admins(message: str):
+    """Send a Telegram alert to all admins (best-effort)."""
+    if not (_bot and _config):
+        return
+    for admin_id in _config.admin_ids:
+        try:
+            await _bot.send_message(admin_id, message, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+
+
+async def vk_outreach_loop():
+    """Conservative organic-growth loop: post a few unique, on-topic comments per day
+    in target VK communities. AI writes each comment (no templates, no links).
+    Auto-pauses 24h and alerts admins on any ban/throttle code; auto-disables after
+    two blocks in a row so a banned account can't keep hammering VK.
+    """
+    CHECK_EVERY = 1800  # check every 30 min
+    consecutive_blocks = 0
+    paused_until = 0.0
+    disabled = False
+
+    # Restore the persisted "already commented" set so we don't double-comment
+    skip_keys: set[str] = set()
+    try:
+        if _db:
+            raw = await _db.get_setting("outreach_skip", "")
+            if raw:
+                skip_keys = set(json.loads(raw))
+    except Exception:
+        pass
+
+    while True:
+        try:
+            await asyncio.sleep(CHECK_EVERY)
+            if disabled or not (_config and _db and _vk_publisher and _rewriter):
+                continue
+            if not _config.vk_competitor_commenting_enabled:
+                continue
+            if not _vk_publisher.has_explicit_user_token or not _config.vk_competitor_targets:
+                continue
+
+            import time as _t
+            now_ts = _t.time()
+            if now_ts < paused_until:
+                continue
+
+            izh_now = dt.now(timezone(timedelta(hours=4)))
+            if not (9 <= izh_now.hour < 22):   # daytime only — night comments look bot-like
+                continue
+
+            day_key = izh_now.strftime("%Y-%m-%d")
+            if await _db.get_daily_counter("outreach", day_key) >= _config.vk_competitor_comments_per_day:
+                continue
+
+            last_ts = float(await _db.get_setting("outreach_last_ts", "0") or 0)
+            if now_ts - last_ts < _config.vk_competitor_min_gap_minutes * 60:
+                continue
+
+            candidate = await _vk_publisher.find_external_post_candidate(
+                _config.vk_competitor_targets,
+                keywords=_config.vk_competitor_keywords,
+                scan_limit=_config.vk_competitor_scan_limit,
+                skip_post_keys=skip_keys,
+            )
+
+            scan_code = _vk_publisher._last_error_code
+            if scan_code in _VK_BAN_CODES:
+                consecutive_blocks += 1
+                paused_until = now_ts + 24 * 3600
+                await _alert_admins(
+                    f"⚠️ <b>VK аутрич: блок при сканировании</b> (code={scan_code}).\n"
+                    f"Пауза 24 ч. Проверь аккаунт/токен."
+                )
+                if consecutive_blocks >= 2:
+                    disabled = True
+                    await _alert_admins("🛑 VK аутрич <b>авто-отключён</b> после 2 блоков подряд. Включи вручную после проверки.")
+                continue
+
+            if not candidate:
+                continue
+
+            comment = await _rewriter.generate_outreach_comment(candidate["text"])
+            if not comment:
+                continue
+
+            cid = await _vk_publisher.create_comment(
+                candidate["post_id"], comment, owner_id=candidate["owner_id"]
+            )
+            if cid:
+                consecutive_blocks = 0
+                skip_keys.add(candidate["post_key"])
+                done = await _db.bump_daily_counter("outreach", day_key)
+                await _db.set_setting("outreach_last_ts", str(now_ts))
+                await _db.set_setting(
+                    "outreach_skip", json.dumps(list(skip_keys)[-300:], ensure_ascii=False)
+                )
+                logger.info(
+                    f"VK outreach: commented under {candidate['post_key']} "
+                    f"({done}/{_config.vk_competitor_comments_per_day} today)"
+                )
+            else:
+                code = _vk_publisher._last_error_code
+                if code in _VK_BAN_CODES:
+                    consecutive_blocks += 1
+                    paused_until = now_ts + 24 * 3600
+                    await _alert_admins(
+                        f"⚠️ <b>VK аутрич: блокировка</b> (code={code}) при комментировании.\n"
+                        f"Пауза 24 ч. Возможен бан — проверь аккаунт."
+                    )
+                    if consecutive_blocks >= 2:
+                        disabled = True
+                        await _alert_admins("🛑 VK аутрич <b>авто-отключён</b> после 2 блоков подряд.")
+                else:
+                    # Benign (comments closed/denied on that post) — skip it and move on
+                    skip_keys.add(candidate["post_key"])
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"VK outreach loop error: {e}")
+            await asyncio.sleep(60)
+
+
 # ── Bot Initialization ──────────────────────────────────────────────────
 
 def create_bot(config: Config, db: Database, rewriter: AIRewriter, media_proc: MediaProcessor, vk_pub: Optional[VKPublisher] = None) -> tuple:
