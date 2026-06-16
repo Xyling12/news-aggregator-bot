@@ -383,6 +383,25 @@ class Database:
         )
         await self._db.commit()
 
+    async def get_daily_counter(self, name: str, day_key: str) -> int:
+        """Return today's value of a named daily counter (0 if a new day)."""
+        stored_day = await self.get_setting(f"{name}_day")
+        if stored_day != day_key:
+            return 0
+        raw = await self.get_setting(f"{name}_count", "0")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
+    async def bump_daily_counter(self, name: str, day_key: str) -> int:
+        """Increment (and reset on a new day) a named daily counter. Returns new value."""
+        current = await self.get_daily_counter(name, day_key)
+        new_val = current + 1
+        await self.set_setting(f"{name}_day", day_key)
+        await self.set_setting(f"{name}_count", str(new_val))
+        return new_val
+
     # ── Analytics ─────────────────────────────────────────────────────────
 
     async def get_weekly_stats(self) -> Dict[str, Any]:

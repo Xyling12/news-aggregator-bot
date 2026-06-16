@@ -89,6 +89,9 @@ class Config:
     language: str = "ru"
     publish_interval: int = 900  # Auto-publish interval in seconds (default 15min)
     auto_publish: bool = False   # Skip moderation and auto-approve all posts
+    publish_max_per_day: int = 14   # Daily cap on auto-published news (0 = unlimited)
+    publish_active_start: int = 7   # Prime-time window start hour (Izhevsk UTC+4)
+    publish_active_end: int = 23    # Prime-time window end hour (exclusive)
 
     # Ad filter stop-words
     ad_stop_words: List[str] = field(default_factory=lambda: [
@@ -140,6 +143,16 @@ class Config:
             if raw is None:
                 return default
             return raw.strip().lower() in ("1", "true", "yes", "on")
+
+        # Prime-time window, e.g. PUBLISH_ACTIVE_HOURS="7-23" (Izhevsk local time)
+        _active_start, _active_end = 7, 23
+        try:
+            _raw_hours = os.getenv("PUBLISH_ACTIVE_HOURS", "7-23").replace(" ", "")
+            _s, _e = _raw_hours.split("-")
+            _active_start = max(0, min(23, int(_s)))
+            _active_end = max(1, min(24, int(_e)))
+        except Exception:
+            _active_start, _active_end = 7, 23
 
         admin_ids_raw = os.getenv("ADMIN_IDS", "")
         admin_ids = [int(x.strip()) for x in admin_ids_raw.split(",") if x.strip()]
@@ -204,6 +217,9 @@ class Config:
             language=os.getenv("LANGUAGE", "ru"),
             publish_interval=int(os.getenv("PUBLISH_INTERVAL", "900")),
             auto_publish=os.getenv("AUTO_PUBLISH", "false").lower() == "true",
+            publish_max_per_day=max(0, int(os.getenv("PUBLISH_MAX_PER_DAY", "14"))),
+            publish_active_start=_active_start,
+            publish_active_end=_active_end,
         )
 
     def validate(self) -> List[str]:

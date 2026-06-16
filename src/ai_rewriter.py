@@ -133,6 +133,22 @@ News text:
 {text}"""
 
 
+# Prompt to generate reader engagement (first comment + optional poll) for a VK post
+ENGAGEMENT_PROMPT = """Ты — SMM-редактор паблика «Ижевск Сегодня». По новости ниже придумай вовлечение для читателей VK.
+
+Верни СТРОГО JSON без пояснений и без текста вокруг:
+{{"comment": "...", "poll": {{"question": "...", "options": ["...", "..."]}}}}
+
+Правила:
+- comment: одна живая короткая фраза-вопрос ОТ ЛИЦА паблика, побуждает написать в комментарии. Без ссылок и хэштегов. Пример: «А вы заметили подорожание? Делитесь в комментариях 👇»
+- poll: короткий опрос по теме новости. question — до 100 символов; options — 2–4 коротких варианта (до 40 символов каждый).
+- ❗ ЕСЛИ новость про гибель, трагедию, ДТП с пострадавшими, пожар/утопление с жертвами, похороны, тяжёлое ЧП, болезни — НЕ делай опрос: верни "poll": null, а comment сделай мягким/сочувственным или тоже null.
+- Только русский язык. Ничего, кроме JSON.
+
+Новость:
+{text}"""
+
+
 # Phrases that indicate AI refused to process the text (safety/policy filters)
 REFUSAL_PHRASES = [
     "я не могу обсуждать",
@@ -1320,6 +1336,46 @@ class AIRewriter:
 
         return _fallback(text_lower)
 
+
+    async def generate_engagement(self, text: str) -> dict:
+        """Generate an engaging first-comment and (when appropriate) a VK poll.
+
+        Returns {"comment": str|None, "poll": {"question": str, "options": [...]}|None}.
+        Sensitive topics (death/tragedy/accident) yield no poll by design.
+        """
+        import json as _json
+        import re as _re
+        empty = {"comment": None, "poll": None}
+        if not self.config.aitunnel_api_key or not text:
+            return empty
+        try:
+            raw = await self._aitunnel_chat(
+                prompt=ENGAGEMENT_PROMPT.format(text=text[:1500]),
+                temperature=0.7,
+                max_tokens=400,
+            )
+        except Exception as e:
+            logger.warning(f"Engagement generation failed: {e}")
+            return empty
+        if not raw:
+            return empty
+        match = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not match:
+            return empty
+        try:
+            data = _json.loads(match.group(0))
+        except Exception:
+            return empty
+
+        comment = (data.get("comment") or "").strip() or None
+        poll = data.get("poll")
+        if isinstance(poll, dict):
+            q = (poll.get("question") or "").strip()
+            opts = [str(o).strip() for o in (poll.get("options") or []) if str(o).strip()]
+            poll = {"question": q, "options": opts} if q and len(opts) >= 2 else None
+        else:
+            poll = None
+        return {"comment": comment, "poll": poll}
 
     async def generate_keywords(self, text: str) -> list[str]:
         """Extract keywords from text for stock photo search."""

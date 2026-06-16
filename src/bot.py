@@ -9,7 +9,7 @@ import os
 import random
 import re
 import traceback
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt, timedelta, timezone
 from typing import Optional
 
 import aiohttp
@@ -1470,15 +1470,40 @@ async def _publish_post(post: dict) -> bool:
                 f"Post #{post['id']}: starting VK crosspost "
                 f"(photo={'local' if photo_for_vk_path else ('url' if photo_for_vk_url else 'none')})"
             )
+
+            # ── VK engagement: AI first-comment + optional poll (boosts smart-feed) ──
+            eng_comment = None
+            poll_attachment = None
+            if _config.vk_self_comment_enabled and _rewriter:
+                try:
+                    eng_source = re.sub(r'<[^>]+>', '', text)
+                    eng_source = re.sub(r'#\S+', '', eng_source).strip()
+                    engagement = await _rewriter.generate_engagement(eng_source)
+                    eng_comment = engagement.get("comment")
+                    poll = engagement.get("poll")
+                    if poll and poll.get("options"):
+                        poll_attachment = await _vk_publisher.create_poll(
+                            poll["question"], poll["options"]
+                        )
+                except Exception as eng_err:
+                    logger.warning(f"Post #{post['id']}: engagement gen failed ({eng_err})")
+
             vk_post_id = await _vk_publisher.publish(
                 text,
                 photo_url=photo_for_vk_url,
                 photo_path=photo_for_vk_path,
                 seo_enabled=_config.vk_seo_enabled,
                 seo_max_tags=_config.vk_seo_max_tags,
+                extra_attachment=poll_attachment,
             )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
+                # Seed a first comment from the community to spark discussion
+                if eng_comment:
+                    try:
+                        await _vk_publisher.create_comment(vk_post_id, eng_comment)
+                    except Exception as c_err:
+                        logger.warning(f"Post #{post['id']}: VK self-comment failed ({c_err})")
             else:
                 logger.warning(f"Post #{post['id']} VK crosspost failed — publish() returned None")
         except Exception as e:
@@ -1917,6 +1942,22 @@ async def auto_publish_loop():
             if now - last_published_at < interval:
                 continue
 
+            # Prime-time window: only publish during active hours (Izhevsk UTC+4).
+            # Outside the window the queue is held, not dropped.
+            izh_now = dt.now(timezone(timedelta(hours=4)))
+            start_h = _config.publish_active_start
+            end_h = _config.publish_active_end
+            if not (start_h <= izh_now.hour < end_h):
+                continue
+
+            # Daily cap: avoid the "firehose" that kills VK/TG reach.
+            day_key = izh_now.strftime("%Y-%m-%d")
+            max_per_day = _config.publish_max_per_day
+            if max_per_day > 0:
+                published_today = await _db.get_daily_counter("autopublish", day_key)
+                if published_today >= max_per_day:
+                    continue
+
             approved = await _db.get_approved_posts()
             if not approved:
                 continue
@@ -1927,6 +1968,8 @@ async def auto_publish_loop():
 
             if success:
                 last_published_at = time.monotonic()
+                if max_per_day > 0:
+                    await _db.bump_daily_counter("autopublish", day_key)
                 logger.info(f"Auto-publisher: published post #{post['id']} ({len(approved)-1} remaining in queue)")
                 for admin_id in _config.admin_ids:
                     try:

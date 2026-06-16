@@ -462,6 +462,7 @@ class VKPublisher:
         *,
         seo_enabled: bool = True,
         seo_max_tags: int = 9,
+        extra_attachment: Optional[str] = None,
     ) -> Optional[int]:
         """
         Publish a post to the VK community wall.
@@ -492,15 +493,20 @@ class VKPublisher:
         }
 
         # Upload and attach photo if available (prefer local file to avoid CDN 403)
+        attachments: list[str] = []
         if photo_path or photo_url:
             attachment = await self._upload_photo(photo_url or "", photo_path=photo_path)
             if attachment:
-                params["attachments"] = attachment
+                attachments.append(attachment)
             else:
                 logger.warning(
                     "VK photo upload failed — post will be published without image. "
                     "Check photos scope on VK_USER_TOKEN and app block status."
                 )
+        if extra_attachment:
+            attachments.append(extra_attachment)
+        if attachments:
+            params["attachments"] = ",".join(attachments)
 
         result = await self._api_call("wall.post", **params)
 
@@ -773,6 +779,33 @@ class VKPublisher:
             return video_id
 
         logger.error("VK Clip: video_id missing from save response")
+        return None
+
+    async def create_poll(self, question: str, options: list[str]) -> Optional[str]:
+        """Create a VK poll for the community and return an attachment string.
+
+        Returns 'poll{owner_id}_{poll_id}' to pass into publish(extra_attachment=...),
+        or None on failure. Polls strongly boost smart-feed reach (votes + comments).
+        """
+        import json as _json
+        clean = [o.strip()[:60] for o in (options or []) if o and o.strip()]
+        if not question or len(clean) < 2:
+            return None
+        clean = clean[:6]  # VK allows up to 10; keep it tidy
+        owner_id = -int(self.group_id)
+        result = await self._api_call(
+            "polls.create",
+            question=question[:120],
+            is_anonymous=1,
+            owner_id=owner_id,
+            add_answers=_json.dumps(clean, ensure_ascii=False),
+            _token_override=self.user_token,
+        )
+        if result and "id" in result:
+            poll_owner = result.get("owner_id", owner_id)
+            logger.info(f"✅ VK poll created: poll{poll_owner}_{result['id']}")
+            return f"poll{poll_owner}_{result['id']}"
+        logger.warning("VK poll creation failed (check token scope / app block)")
         return None
 
     async def create_comment(
