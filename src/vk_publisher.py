@@ -30,9 +30,8 @@ class VKPublisher:
     DEFAULT_VK_SEO_TAGS = [
         "#Ижевск",
         "#Удмуртия",
+        "#ИжевскСегодня",
         "#НовостиИжевска",
-        "#НовостиУдмуртии",
-        "#Новости",
     ]
     SEO_TOPIC_RULES = [
         (("дтп", "авар", "пожар", "чп", "краж", "мошен"), ["#Происшествия", "#Безопасность"]),
@@ -477,12 +476,7 @@ class VKPublisher:
         """
         # Convert HTML to VK-compatible text
         vk_text = self._html_to_vk(text)
-        vk_text += (
-            "\n\n─ ─ ─ ─ ─\n"
-            "📸 Есть новость, фото или проблема в городе?\n"
-            "Присылай нам в сообщения группы (опубликуем): vk.com/im/convo/-236380336\n"
-            "📱 Наш Telegram: t.me/IzhevskTodayNews"
-        )
+        vk_text += "\n\n📲 Мы в Telegram: t.me/IzhevskTodayNews"
 
         if seo_enabled:
             vk_text = self._append_vk_seo_tags(vk_text, max_tags=seo_max_tags)

@@ -45,8 +45,11 @@ class MAXPublisher:
     def _clean_html_for_max(self, text: str) -> str:
         """Convert HTML formatting to MAX-compatible HTML and swap footer."""
         # MAX supports HTML with format="html", so keep <b>, <i>, <a> tags
-        # Just remove Telegram-specific footer and replace with MAX footer
-        text = re.sub(r'\n*📲\s*@\w+\s*\|\s*📩\s*@\w+\s*$', '', text.strip())
+        # Just remove the Telegram-specific CTA footer line and replace with MAX footer
+        text = re.sub(
+            r'\n*📲[^\n]*(?:IzhevskTodayNews|IzhevskTodayBot)[^\n]*$',
+            '', text.strip(),
+        )
         text = text.strip()
         text += "\n\n📲 Читайте нас в MAX!"
         return text

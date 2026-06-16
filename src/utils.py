@@ -330,14 +330,12 @@ def format_post(text: str, hashtags: list) -> str:
     for city_tag in ["#Ижевск", "#Удмуртия", "#ИжевскСегодня"]:
         _append_tag(city_tag)
     if all_tags:
-        parts.append("─ ─ ─ ─ ─")
         parts.append(" ".join(all_tags))
         parts.append("")
 
-    # Footer CTA
+    # Footer CTA — minimal: a single clean channel handle, no divider, no extra links
     parts.append(
         '📲 <a href="https://t.me/IzhevskTodayNews">@IzhevskTodayNews</a>'
-        '  |  🤖 <a href="https://t.me/NewsRussain11_bot">@IzhevskTodayBot</a>'
     )
 
     return "\n".join(parts)
