@@ -16,7 +16,7 @@ from src.database import Database
 from src.channel_monitor import ChannelMonitor
 from src.ai_rewriter import AIRewriter
 from src.media_processor import MediaProcessor
-from src.bot import create_bot, process_new_post, auto_publish_loop, vk_outreach_loop
+from src.bot import create_bot, process_new_post, auto_publish_loop, vk_outreach_loop, youtube_clips_loop
 from src.content_generator import ContentGenerator
 from src.content_scheduler import ContentScheduler
 from src.vk_publisher import VKPublisher
@@ -124,6 +124,7 @@ async def main():
 
     publish_task = None
     outreach_task = None
+    ytclips_task = None
     monitor_started = False
 
     try:
@@ -150,6 +151,16 @@ async def main():
         else:
             logger.info("VK outreach loop idle (disabled or no targets configured)")
 
+        # Start YouTube Shorts → VK Clips loop (dormant unless YT_CLIPS_ENABLED)
+        ytclips_task = asyncio.create_task(youtube_clips_loop())
+        if config.yt_clips_enabled and config.yt_clips_channels:
+            logger.info(
+                f"YouTube Clips started: {len(config.yt_clips_channels)} channels, "
+                f"{config.yt_clips_per_day}/day at {config.yt_clips_slots}"
+            )
+        else:
+            logger.info("YouTube Clips loop idle (disabled)")
+
         # Start content scheduler (generates unique content on fixed schedule)
         await content_scheduler.start()
 
@@ -174,6 +185,8 @@ async def main():
             publish_task.cancel()
         if outreach_task:
             outreach_task.cancel()
+        if ytclips_task:
+            ytclips_task.cancel()
         await content_scheduler.stop()
         if monitor_started:
             await monitor.stop()

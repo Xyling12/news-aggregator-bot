@@ -1,0 +1,146 @@
+"""
+YouTube Shorts → VK Clips fetcher.
+
+Downloads a fresh, short, vertical clip from a curated list of local Izhevsk
+YouTube channels for re-posting to VK Clips. Direct download from the server IP
+(no proxy needed — datacenter proxies trip YouTube's bot check, the host IP works).
+
+Safety filters: vertical only, < ~95s, and a sensitive-topic title blocklist so
+tragedies/accidents never get re-posted. Each video id is remembered to avoid repeats.
+"""
+import asyncio
+import json
+import logging
+import os
+import subprocess
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Never re-post clips whose title mentions these — even from trusted channels
+SENSITIVE_WORDS = [
+    "стрельб", "стрелял", "погиб", "погибш", "теракт", "авари", "дтп", "суицид",
+    "взрыв", "убий", "труп", "смерт", "смертельн", "жертв", "насил", "изнасил",
+    "пожар", "утонул", "утоплен", "трагед", "расстрел", "нож", "зарезал",
+]
+
+
+class YouTubeClips:
+    """Finds and downloads one fresh vertical short from approved channels."""
+
+    def __init__(self, channels: list, seen_path: str, max_seen: int = 800):
+        self.channels = list(channels or [])
+        self.seen_path = seen_path
+        self.max_seen = max_seen
+        self._seen = self._load_seen()
+
+    # ── seen-set persistence (survives restarts / redeploys via data volume) ──
+    def _load_seen(self) -> set:
+        try:
+            with open(self.seen_path, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+
+    def _save_seen(self):
+        try:
+            os.makedirs(os.path.dirname(self.seen_path), exist_ok=True)
+            with open(self.seen_path, "w", encoding="utf-8") as f:
+                json.dump(list(self._seen)[-self.max_seen:], f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"YT clips: could not save seen set: {e}")
+
+    async def _run(self, args: list, timeout: int = 120) -> tuple:
+        """Run yt-dlp (binary, with python module fallback). Returns (code, output)."""
+        def _call():
+            for base in (["yt-dlp"], ["python", "-m", "yt_dlp"]):
+                try:
+                    p = subprocess.run(
+                        base + args, capture_output=True, text=True, timeout=timeout
+                    )
+                    return p.returncode, (p.stdout or "") + (p.stderr or "")
+                except FileNotFoundError:
+                    continue
+                except subprocess.TimeoutExpired:
+                    return 1, "timeout"
+            return 1, "yt-dlp not found"
+        return await asyncio.to_thread(_call)
+
+    @staticmethod
+    def _is_sensitive(title: str) -> bool:
+        t = (title or "").lower()
+        return any(w in t for w in SENSITIVE_WORDS)
+
+    def _channel_url(self, ch: str) -> str:
+        if ch.startswith("http"):
+            return ch
+        if ch.startswith("UC"):
+            return f"https://www.youtube.com/channel/{ch}/shorts"
+        return f"https://www.youtube.com/@{ch.lstrip('@')}/shorts"
+
+    async def fetch_one(self, tmp_dir: str) -> Optional[dict]:
+        """Return {"path","title","channel","id"} for a downloaded clip, or None."""
+        import random
+
+        # 1) Collect fresh, non-sensitive candidate ids from all channels
+        candidates = []  # (id, title, channel)
+        channels = list(self.channels)
+        random.shuffle(channels)
+        for ch in channels:
+            code, out = await self._run(
+                ["--flat-playlist", "--no-warnings", "--playlist-end", "20",
+                 "--print", "%(id)s|%(title)s|%(channel)s", self._channel_url(ch)],
+                timeout=90,
+            )
+            if code != 0:
+                logger.debug(f"YT clips: list failed for {ch}")
+                continue
+            for line in out.splitlines():
+                parts = line.split("|", 2)
+                if len(parts) < 2:
+                    continue
+                vid = parts[0].strip()
+                title = parts[1].strip()
+                channel = parts[2].strip() if len(parts) > 2 else ch
+                if not vid or vid in self._seen:
+                    continue
+                if self._is_sensitive(title):
+                    continue
+                candidates.append((vid, title, channel))
+
+        if not candidates:
+            return None
+        random.shuffle(candidates)
+
+        # 2) Validate (vertical + short) and download the first that fits
+        for vid, title, channel in candidates[:10]:
+            self._seen.add(vid)  # mark seen so we don't re-evaluate next time
+            meta_code, meta = await self._run(
+                ["--no-warnings", "--print", "%(duration)s|%(width)s|%(height)s",
+                 "--simulate", f"https://www.youtube.com/watch?v={vid}"],
+                timeout=60,
+            )
+            if meta_code != 0 or not meta.strip():
+                continue
+            try:
+                dur_s, w_s, h_s = meta.strip().splitlines()[0].split("|")
+                dur, w, h = float(dur_s), int(w_s), int(h_s)
+            except Exception:
+                continue
+            if dur < 4 or dur > 95 or h <= w:   # short + vertical only
+                continue
+
+            out_path = os.path.join(tmp_dir, f"yt_{vid}.mp4")
+            dl_code, _ = await self._run(
+                ["--no-warnings", "-f", "bv*[height<=1920]+ba/b[ext=mp4]/b",
+                 "--merge-output-format", "mp4", "-o", out_path,
+                 f"https://www.youtube.com/watch?v={vid}"],
+                timeout=240,
+            )
+            if dl_code == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 50_000:
+                self._save_seen()
+                logger.info(f"YT clips: downloaded {vid} ({dur:.0f}s, {w}x{h}) from {channel}")
+                return {"path": out_path, "title": title, "channel": channel, "id": vid}
+
+        self._save_seen()
+        return None

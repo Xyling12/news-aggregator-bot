@@ -1989,6 +1989,67 @@ async def auto_publish_loop():
             await asyncio.sleep(60)
 
 
+async def youtube_clips_loop():
+    """Post a few local Izhevsk YouTube Shorts to VK Clips per day, at morning/noon/
+    evening slots within the prime-time window. Vertical + short + non-sensitive only.
+    """
+    CHECK_EVERY = 600  # check every 10 min
+    fetcher = None
+    while True:
+        try:
+            await asyncio.sleep(CHECK_EVERY)
+            if not (_config and _db and _vk_publisher and _vk_publisher.enabled):
+                continue
+            if not getattr(_config, "yt_clips_enabled", False) or not _config.yt_clips_channels:
+                continue
+            if not _vk_publisher.has_explicit_user_token:
+                continue
+
+            izh_now = dt.now(timezone(timedelta(hours=4)))
+            slots = sorted(_config.yt_clips_slots)
+            cap = min(_config.yt_clips_per_day, len(slots))
+            day_key = izh_now.strftime("%Y-%m-%d")
+            done = await _db.get_daily_counter("ytclips", day_key)
+            if done >= cap:
+                continue
+            # Time for the next slot? (slot hours = morning/noon/evening)
+            if izh_now.hour < slots[done]:
+                continue
+
+            if fetcher is None:
+                from src.youtube_clips import YouTubeClips
+                seen_path = os.path.join(_config.media_dir, "..", "data", "yt_clips_seen.json")
+                fetcher = YouTubeClips(_config.yt_clips_channels, seen_path)
+
+            import tempfile
+            import shutil
+            tmpd = tempfile.mkdtemp(prefix="ytclip_")
+            try:
+                clip = await fetcher.fetch_one(tmpd)
+                if not clip:
+                    logger.info("YT clips: no fresh suitable short found this slot")
+                    continue
+                caption = f"{clip['title']}\n\nВидео: YouTube · {clip['channel']}"
+                link = f"https://vk.com/public{_config.vk_group_id}" if _config.vk_group_id else ""
+                vid_id = await _vk_publisher.upload_clip(clip["path"], caption=caption[:300], link_url=link)
+                if vid_id:
+                    await _db.bump_daily_counter("ytclips", day_key)
+                    logger.info(
+                        f"YT clip → VK Clips OK: {clip['id']} ({clip['channel']}) "
+                        f"slot {done + 1}/{cap}"
+                    )
+                else:
+                    logger.warning(f"YT clip upload to VK failed for {clip['id']}")
+            finally:
+                shutil.rmtree(tmpd, ignore_errors=True)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"YT clips loop error: {e}")
+            await asyncio.sleep(60)
+
+
 # VK error codes that signal a ban/throttle (vs benign "comments closed on that post")
 _VK_BAN_CODES = {5, 8, 9, 29, 214}
 

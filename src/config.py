@@ -76,6 +76,12 @@ class Config:
     vk_competitor_min_gap_minutes: int = 480
     vk_competitor_scan_limit: int = 6
 
+    # Optional: YouTube Shorts → VK Clips (local Izhevsk channels)
+    yt_clips_enabled: bool = False
+    yt_clips_channels: List[str] = field(default_factory=list)
+    yt_clips_per_day: int = 3
+    yt_clips_slots: List[int] = field(default_factory=lambda: [9, 14, 19])  # morning/noon/evening (Izhevsk)
+
     # Optional: MAX crossposting
     max_bot_token: str = ""
     max_chat_id: str = ""
@@ -209,6 +215,16 @@ class Config:
             vk_competitor_scan_limit=max(
                 3, min(20, int(os.getenv("VK_COMPETITOR_SCAN_LIMIT", "6")))
             ),
+            yt_clips_enabled=_env_bool("YT_CLIPS_ENABLED", False),
+            yt_clips_channels=_split_csv("YT_CLIPS_CHANNELS") or [
+                "UC-JcbSvFEBYohaXn0PsY0gQ",  # Проект Ижевск (городской транспорт/жизнь)
+                "UCEH8ygAMkIT4ydp8hd9kNJQ",  # ИА Сусанин (Удмуртия в минуту)
+                "UCzNtuab3OOSCmiqVcjENxLQ",  # ИА Удмуртия
+            ],
+            yt_clips_per_day=max(0, min(6, int(os.getenv("YT_CLIPS_PER_DAY", "3")))),
+            yt_clips_slots=[
+                int(x) for x in os.getenv("YT_CLIPS_SLOTS", "9,14,19").split(",") if x.strip().isdigit()
+            ] or [9, 14, 19],
             max_bot_token=os.getenv("MAX_BOT_TOKEN", ""),
             max_chat_id=os.getenv("MAX_CHAT_ID", ""),
             pexels_api_key=os.getenv("PEXELS_API_KEY", ""),
