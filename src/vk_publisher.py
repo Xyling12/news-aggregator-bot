@@ -785,6 +785,59 @@ class VKPublisher:
         logger.error("VK Clip: video_id missing from save response")
         return None
 
+    async def upload_video(self, video_path: str, name: str = "") -> Optional[str]:
+        """Upload a regular video to the community wall and return a 'video{owner}_{id}'
+        attachment string for publish(extra_attachment=...). None on failure.
+        """
+        if not os.path.exists(video_path):
+            return None
+        if os.path.getsize(video_path) > 256 * 1024 * 1024:
+            logger.error("VK video upload: file > 256 MB, skipping")
+            return None
+
+        save_params: dict = {
+            "group_id": int(self.group_id),
+            "name": (name or "Видео")[:128],
+            "is_private": 0,
+            "wallpost": 0,
+            "repeat": 0,
+        }
+        if self.has_explicit_user_token:
+            save_params["_token_override"] = self.user_token
+
+        save_result = await self._api_call("video.save", **save_params)
+        if not save_result or not save_result.get("upload_url"):
+            logger.error(f"VK video.save failed: {save_result}")
+            return None
+
+        upload_url = save_result["upload_url"]
+        video_id = save_result.get("video_id")
+        owner_id = save_result.get("owner_id")
+
+        import requests
+
+        def _upload_sync():
+            try:
+                with open(video_path, "rb") as vf:
+                    resp = requests.post(
+                        upload_url,
+                        files={"video_file": ("video.mp4", vf, "video/mp4")},
+                        timeout=180,
+                    )
+                return resp.status_code, resp.text[:300]
+            except Exception as e:
+                return 0, str(e)
+
+        code, body = await asyncio.to_thread(_upload_sync)
+        if code != 200:
+            logger.error(f"VK video upload failed: HTTP {code}: {body}")
+            return None
+        if video_id and owner_id:
+            logger.info(f"✅ VK video uploaded: video{owner_id}_{video_id}")
+            return f"video{owner_id}_{video_id}"
+        logger.error("VK video upload: video_id missing from save response")
+        return None
+
     async def create_poll(self, question: str, options: list[str]) -> Optional[str]:
         """Create a VK poll for the community and return an attachment string.
 

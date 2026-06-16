@@ -1378,8 +1378,22 @@ async def _publish_post(post: dict) -> bool:
                 caption=text[:1024],
                 parse_mode=ParseMode.HTML,
             )
+        elif (
+            post["media_type"] == "video"
+            and media_path
+            and media_path.lower().endswith(".mp4")
+            and os.path.exists(media_path)
+        ):
+            # Real source video — repost it as a video, not a stock photo
+            msg = await _bot.send_video(
+                target,
+                video=FSInputFile(media_path),
+                caption=text[:1024],
+                parse_mode=ParseMode.HTML,
+                supports_streaming=True,
+            )
         elif post["media_type"] in ("photo", "video"):
-            # For video posts, media_local_path is the video thumbnail (background-image)
+            # For video posts without an MP4, media_local_path is the preview frame
             primary_source = None
             if media_path and os.path.exists(media_path):
                 primary_source = FSInputFile(media_path)
@@ -1461,14 +1475,31 @@ async def _publish_post(post: dict) -> bool:
     if _vk_publisher and _vk_publisher.enabled:
         try:
             photo_for_vk_url = post.get("replacement_media_url")
-            # Priority: 1) local stock file (already on disk), 2) original TG photo file, 3) URL
-            photo_for_vk_path = (
-                local_stock
-                or (media_path if media_path and os.path.exists(media_path) else None)
+            # Real source video → upload to VK as a video attachment (not a photo)
+            is_video_file = bool(
+                post["media_type"] == "video"
+                and media_path
+                and media_path.lower().endswith(".mp4")
+                and os.path.exists(media_path)
             )
+            video_attachment = None
+            if is_video_file:
+                try:
+                    video_attachment = await _vk_publisher.upload_video(
+                        media_path, name=re.sub(r'<[^>]+>', '', text)[:80]
+                    )
+                except Exception as v_err:
+                    logger.warning(f"Post #{post['id']}: VK video upload failed ({v_err})")
+                photo_for_vk_path = None  # don't try to send an mp4 as a photo
+            else:
+                # Priority: 1) local stock file (on disk), 2) original TG photo file, 3) URL
+                photo_for_vk_path = (
+                    local_stock
+                    or (media_path if media_path and os.path.exists(media_path) else None)
+                )
             logger.info(
                 f"Post #{post['id']}: starting VK crosspost "
-                f"(photo={'local' if photo_for_vk_path else ('url' if photo_for_vk_url else 'none')})"
+                f"(media={'video' if video_attachment else ('local' if photo_for_vk_path else ('url' if photo_for_vk_url else 'none'))})"
             )
 
             # ── VK engagement: AI first-comment + optional poll (boosts smart-feed) ──
@@ -1488,13 +1519,16 @@ async def _publish_post(post: dict) -> bool:
                 except Exception as eng_err:
                     logger.warning(f"Post #{post['id']}: engagement gen failed ({eng_err})")
 
+            combined_attachment = ",".join(
+                a for a in (video_attachment, poll_attachment) if a
+            ) or None
             vk_post_id = await _vk_publisher.publish(
                 text,
                 photo_url=photo_for_vk_url,
                 photo_path=photo_for_vk_path,
                 seo_enabled=_config.vk_seo_enabled,
                 seo_max_tags=_config.vk_seo_max_tags,
-                extra_attachment=poll_attachment,
+                extra_attachment=combined_attachment,
             )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")

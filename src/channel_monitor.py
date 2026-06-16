@@ -136,9 +136,19 @@ class ChannelMonitor:
             media_url = post.get("media_url")
             media_local_path = None
 
-            # Download primary photo / video thumbnail
-            # For video posts, media_url is the background-image thumbnail (not the MP4)
-            if media_url and media_type in ("photo", "video"):
+            # For video posts, try to grab the actual MP4 so our repost has the
+            # real clip (not a stock photo). Falls back to the preview frame.
+            video_url = post.get("video_url")
+            if media_type == "video" and video_url:
+                try:
+                    media_local_path = await self._download_video(
+                        video_url, channel_username, msg_id
+                    )
+                except Exception as e:
+                    logger.error(f"Video download failed: {e}")
+
+            # Download primary photo / video preview frame (when no MP4 was grabbed)
+            if media_local_path is None and media_url and media_type in ("photo", "video"):
                 try:
                     media_local_path = await self._download_media(
                         media_url, channel_username, msg_id
@@ -305,9 +315,15 @@ class ChannelMonitor:
             media_url = unique_urls[0] if unique_urls else None
             extra_media_urls = unique_urls[1:] if len(unique_urls) > 1 else []
 
-            # Check for videos
+            # Check for videos — also grab the direct MP4 URL when t.me exposes it
+            video_url = None
             if '<video' in block or 'tgme_widget_message_video' in block:
                 media_type = "video"
+                mp4_matches = re.findall(
+                    r'<video[^>]+src="([^"]+\.mp4[^"]*)"', block, flags=re.IGNORECASE
+                )
+                if mp4_matches:
+                    video_url = unescape(mp4_matches[0])
 
             posts.append({
                 "message_id": msg_id,
@@ -315,9 +331,50 @@ class ChannelMonitor:
                 "media_type": media_type,
                 "media_url": media_url,
                 "extra_media_urls": extra_media_urls,
+                "video_url": video_url,
             })
 
         return posts
+
+    async def _download_video(
+        self, url: str, channel: str, msg_id: int, max_mb: int = 50
+    ) -> Optional[str]:
+        """Download a source MP4 (size-capped). Returns local path or None."""
+        if not self._session:
+            return None
+        os.makedirs(self.config.media_dir, exist_ok=True)
+        filepath = os.path.join(self.config.media_dir, f"{channel}_{msg_id}.mp4")
+        max_bytes = max_mb * 1024 * 1024
+        try:
+            async with self._session.get(
+                url, timeout=aiohttp.ClientTimeout(total=120)
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Video download HTTP {resp.status}: {url[:80]}")
+                    return None
+                size = 0
+                with open(filepath, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(65536):
+                        size += len(chunk)
+                        if size > max_bytes:
+                            logger.info(f"Video too large (>{max_mb}MB), skipping MP4: {url[:80]}")
+                            f.close()
+                            os.remove(filepath)
+                            return None
+                        f.write(chunk)
+            if size < 10000:  # too small to be a real clip
+                os.remove(filepath)
+                return None
+            logger.info(f"Downloaded source video: {filepath} ({size // 1024} KB)")
+            return filepath
+        except Exception as e:
+            logger.error(f"Video download error: {e}")
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except Exception:
+                pass
+            return None
 
     async def _download_media(
         self, url: str, channel: str, msg_id: int
