@@ -146,6 +146,17 @@ class ChannelMonitor:
                 except Exception as e:
                     logger.error(f"Media download failed: {e}")
 
+                # Reject tiny thumbnails (e.g. 90x67 court previews) — they look awful
+                # published full-size. Drop the image but keep the text.
+                if media_local_path and self._is_image_too_small(media_local_path):
+                    logger.info(
+                        f"@{channel_username}: msg {msg_id} — source image too small, "
+                        f"dropping it (stock/local image will be used instead)"
+                    )
+                    media_local_path = None
+                    if media_type == "photo":
+                        media_type = "none"
+
             # Download extra photos from album posts
             extra_media_urls = post.get("extra_media_urls", [])
             extra_local_paths = []
@@ -348,6 +359,22 @@ class ChannelMonitor:
                 await asyncio.sleep(2)  # Wait before retry
 
         return None
+
+    # Minimum acceptable resolution for a source photo (long side, px).
+    # Telegram preview thumbnails are ~90px — those must never be published.
+    _MIN_PHOTO_PX = 400
+
+    @classmethod
+    def _is_image_too_small(cls, path: str) -> bool:
+        """Return True if the downloaded image is a tiny thumbnail (e.g. 90x67)."""
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                w, h = img.size
+            return max(w, h) < cls._MIN_PHOTO_PX
+        except Exception as e:
+            logger.debug(f"Could not measure image {path}: {e}")
+            return False  # On error, don't discard — better a photo than none
 
     @staticmethod
     def _is_weather_report(text: str) -> bool:

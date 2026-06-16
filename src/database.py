@@ -214,6 +214,22 @@ class Database:
         )
         await self._db.commit()
 
+    async def set_local_media_override(self, post_id: int, local_path: str):
+        """Force a local image as the post's media (e.g. official alert template).
+
+        Sets media_local_path + media_type='photo', clears watermark flag and any
+        stock replacement URL so the publisher uses this image on Telegram and VK.
+        """
+        await self._db.execute(
+            """UPDATE posts
+               SET media_local_path = ?, media_type = 'photo',
+                   has_watermark = 0, replacement_media_url = NULL,
+                   media_extra_paths = NULL
+               WHERE id = ?""",
+            (local_path, post_id),
+        )
+        await self._db.commit()
+
     async def get_post(self, post_id: int) -> Optional[Dict[str, Any]]:
         """Get a single post by ID."""
         cursor = await self._db.execute("SELECT * FROM posts WHERE id = ?", (post_id,))

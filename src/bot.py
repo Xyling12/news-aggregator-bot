@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import traceback
 from datetime import datetime as dt, timedelta
@@ -1284,6 +1285,52 @@ async def _send_review_post(chat_id: int, post: dict):
     )
 
 
+# ── Alert image pool ────────────────────────────────────────────────────
+# Official-style templates for emergency posts, so air-raid/danger news always
+# gets a clean on-topic image instead of a random Moscow stock photo.
+_ALERTS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "alerts"
+)
+# Danger subjects — the post must clearly be about one of these to get an alert card.
+_ALERT_SUBJECTS = {
+    "rocket": ("ракетная опас", "ракетной опас", "ракетную опас"),
+    "sky": ("опасное небо", "опасного неба", "опасному небу"),
+    "drones": ("беспилотн", "бпла"),
+    "sirens": ("воздушная тревог", "воздушной тревог", "звуки сирен", "звуках сирен",
+               "звук сирен", "вой сирен", "сигнал сирен", "сигналы сирен"),
+}
+_ALERT_FILES = {
+    "rocket": ("rocket_1.png", "rocket_2.png"),
+    "sky": ("sky_1.png", "sky_2.png"),
+    "drones": ("drones_1.png",),
+    "sirens": ("sirens_1.png",),
+}
+# Cancellation markers — only consulted once a danger subject is already matched.
+_ALERT_CANCEL = ("отмен", "отбой", "сняли", "снят", "миновал", "завершён", "завершен")
+
+
+def _pick_alert_image(text: str) -> Optional[str]:
+    """Return a local official-style template path for an emergency post, or None.
+
+    Only fires when the text is clearly about an air-raid/danger subject, so
+    everyday phrases like «сняли ограничения на дороге» don't trigger it.
+    """
+    t = (text or "").lower()
+    subject = next((k for k, kws in _ALERT_SUBJECTS.items() if any(w in t for w in kws)), None)
+    if not subject:
+        return None
+    if any(c in t for c in _ALERT_CANCEL):
+        files = ("cancel_1.png", "cancel_2.png")
+    else:
+        files = _ALERT_FILES[subject]
+    existing = [
+        os.path.join(_ALERTS_DIR, f)
+        for f in files
+        if os.path.exists(os.path.join(_ALERTS_DIR, f))
+    ]
+    return random.choice(existing) if existing else None
+
+
 async def _publish_post(post: dict) -> bool:
     """Publish a post to the target channel.
 
@@ -1532,10 +1579,32 @@ async def process_new_post(post_id: int):
         "сертификат на скидку", "дарим скидку", "скидка именинникам",
         "бронируйте столик", "забронировать столик", "бронируй стол",
         "happy hour", "хэппи аур", "business lunch", "бизнес-ланч от",
+        # MLM / инфобизнес / «лёгкий заработок»
+        "создайте свой чат-бот", "создай свой чат-бот", "создать чат-бота и зарабат",
+        "зарабатывайте от", "зарабатывай от", "зарабатывать от",
+        "доход от 70", "доход в 70", "доход 70-80", "70-80 тысяч",
+        "тысяч рублей в месяц", "тысяч в месяц удал", "пассивный доход",
+        "не нужно быть программистом", "не нужно иметь высшее",
+        "пошаговые инструкции по созданию", "покинуть офисные будни",
+        "финансовая свобода", "удалённый заработок", "удаленный заработок",
+        "работа на дому от", "инвестиции с гарантией", "гарантированный доход",
+        # Нативная реклама / заказуха (антиреклама конкурентов, «партнёр проекта»)
+        "станет главным партнером", "станет главным партнёром",
+        "главным партнером этого", "главным партнёром этого",
+        "наш партнёр", "наш партнер", "партнёр проекта", "партнер проекта",
+        "подслушала разговор", "подслушал разговор", "по секрету расскажу",
+        "спа maitai", "спа майтай", "тайский спа",
     ]
     if any(w in text_lower for w in _HARD_AD_WORDS):
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: hard ad keyword matched")
+        return
+
+    # Tier 1b: income-promise regex — ловит «от 70 до 250 тысяч рублей», «100 000 ₽/мес» и т.п.
+    if re.search(r"от\s*\d[\d\s]{1,7}\s*(?:до\s*\d[\d\s]{1,7}\s*)?(?:тыс|000)", text_lower) and \
+       any(w in text_lower for w in ("заработ", "доход", "рублей в месяц", "в месяц", "ежемесячно")):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: income-promise ad pattern")
         return
 
     # Tier 2: soft stop — 2+ generic ad words
@@ -1552,6 +1621,26 @@ async def process_new_post(post_id: int):
         if await _db.has_recent_topic_post(_WEATHER_KEYWORDS[:4], hours=4):
             await _db.update_post_status(post_id, "rejected")
             logger.info(f"Post #{post_id} rejected: weather cooldown (duplicate weather post in last 4h)")
+            return
+
+    # Step 0b2: Air-raid / danger cooldown — одна тревожная волна = 1 пост, а не 8.
+    # Пропускаем ПЕРВЫЙ сигнал и отдельно отбой/отмену, режем все промежуточные повторы.
+    _DANGER_KEYWORDS = [
+        "ракетная опасность", "ракетной опасности", "опасное небо", "опасного неба",
+        "воздушная тревога", "воздушной тревоги", "беспилотн", "бпла", "дрон",
+        "угроза атаки", "сигнал тревог", "звуки сирен", "сирены", "сирен ",
+    ]
+    _CANCEL_MARKERS = ["отмен", "отбой", "сняли", "завершен", "завершён", "миновал", "опасность мин"]
+    is_danger = any(kw in text_lower_w for kw in _DANGER_KEYWORDS)
+    is_cancel = any(m in text_lower_w for m in _CANCEL_MARKERS)
+    if is_danger and not is_cancel:
+        # Если в последние 3 часа уже был тревожный пост — это дубль той же волны
+        if await _db.has_recent_topic_post(
+            ["ракетная опасн", "опасное небо", "воздушная тревог", "беспилотн", "сирен"],
+            hours=3,
+        ):
+            await _db.update_post_status(post_id, "rejected")
+            logger.info(f"Post #{post_id} rejected: air-raid cooldown (duplicate alert within 3h)")
             return
 
     # Step 0c: Relevance filter for federal channels
@@ -1690,63 +1779,75 @@ async def process_new_post(post_id: int):
     #   4. No suitable photo found → publish text-only (better than generic stock)
     try:
         stock_url = None
-        has_original_clean = (
-            bool(_config.use_source_media)
-            and post["media_type"] in ("photo", "video")
-            and post.get("media_local_path")
-            and not post.get("has_watermark")
-        )
 
-        if post["media_type"] in ("photo", "video") and post.get("media_local_path") and _config.use_source_media:
-            # Best-effort detector in addition to DB watermark flag.
-            detected, confidence = _media_processor.detect_watermark(post["media_local_path"])
-            if detected and confidence >= 0.25:
-                has_original_clean = False
-                logger.info(
-                    f"Post #{post_id}: source photo blocked by watermark detector "
-                    f"(confidence={confidence:.2f})"
-                )
-
-        if has_original_clean:
-            # Original photo from source — allowed only when USE_SOURCE_MEDIA=true and clean.
-            logger.info(f"Post #{post_id}: using original source photo (no watermark)")
+        # Priority 0: emergency posts → use official-style local alert template.
+        # Source channels rarely attach the proper МЧС card, and generic stock gives
+        # a random Moscow photo, so we override with our own on-topic image.
+        alert_img = _pick_alert_image(original_text + " " + (rewritten or ""))
+        if alert_img:
+            await _db.set_local_media_override(post_id, alert_img)
+            logger.info(
+                f"Post #{post_id}: emergency post — using local alert template "
+                f"{os.path.basename(alert_img)}"
+            )
         else:
-            # Need stock: either source disabled, watermark replacement, or no photo at all
-            keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
+            has_original_clean = (
+                bool(_config.use_source_media)
+                and post["media_type"] in ("photo", "video")
+                and post.get("media_local_path")
+                and not post.get("has_watermark")
+            )
 
-            if keywords and len(keywords) >= 2:
-                stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
-
-                if stock_photos:
-                    # Take first result not already used globally (dedup across parallel posts)
-                    async with _used_stock_urls_lock:
-                        chosen = None
-                        for candidate in stock_photos:
-                            url = candidate.get("url", "")
-                            if url and url not in _used_stock_urls:
-                                chosen = candidate
-                                _used_stock_urls.add(url)
-                                # Keep set bounded to last 500 entries
-                                if len(_used_stock_urls) > 500:
-                                    _used_stock_urls.pop()
-                                break
-                        if not chosen:
-                            chosen = stock_photos[0]  # All used → reuse first as fallback
-
-                    desc = chosen.get("description", "")
-                    kw_match = any(kw.lower() in desc.lower() for kw in keywords[:3]) if desc else False
-                    stock_url = chosen["url"]
+            if post["media_type"] in ("photo", "video") and post.get("media_local_path") and _config.use_source_media:
+                # Best-effort detector in addition to DB watermark flag.
+                detected, confidence = _media_processor.detect_watermark(post["media_local_path"])
+                if detected and confidence >= 0.25:
+                    has_original_clean = False
                     logger.info(
-                        f"Post #{post_id}: stock photo selected from {chosen.get('source', 'unknown')} "
-                        f"(kw_match={kw_match}, keywords={keywords[:3]})"
+                        f"Post #{post_id}: source photo blocked by watermark detector "
+                        f"(confidence={confidence:.2f})"
                     )
-                else:
-                    logger.info(f"Post #{post_id}: no stock photos found — publishing text-only")
-            else:
-                logger.info(f"Post #{post_id}: insufficient keywords for stock search — text-only")
 
-        if stock_url:
-            await _db.update_post_media(post_id, replacement_url=stock_url)
+            if has_original_clean:
+                # Original photo from source — allowed only when USE_SOURCE_MEDIA=true and clean.
+                logger.info(f"Post #{post_id}: using original source photo (no watermark)")
+            else:
+                # Need stock: either source disabled, watermark replacement, or no photo at all
+                keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
+
+                if keywords and len(keywords) >= 2:
+                    stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
+
+                    if stock_photos:
+                        # Take first result not already used globally (dedup across parallel posts)
+                        async with _used_stock_urls_lock:
+                            chosen = None
+                            for candidate in stock_photos:
+                                url = candidate.get("url", "")
+                                if url and url not in _used_stock_urls:
+                                    chosen = candidate
+                                    _used_stock_urls.add(url)
+                                    # Keep set bounded to last 500 entries
+                                    if len(_used_stock_urls) > 500:
+                                        _used_stock_urls.pop()
+                                    break
+                            if not chosen:
+                                chosen = stock_photos[0]  # All used → reuse first as fallback
+
+                        desc = chosen.get("description", "")
+                        kw_match = any(kw.lower() in desc.lower() for kw in keywords[:3]) if desc else False
+                        stock_url = chosen["url"]
+                        logger.info(
+                            f"Post #{post_id}: stock photo selected from {chosen.get('source', 'unknown')} "
+                            f"(kw_match={kw_match}, keywords={keywords[:3]})"
+                        )
+                    else:
+                        logger.info(f"Post #{post_id}: no stock photos found — publishing text-only")
+                else:
+                    logger.info(f"Post #{post_id}: insufficient keywords for stock search — text-only")
+
+            if stock_url:
+                await _db.update_post_media(post_id, replacement_url=stock_url)
     except Exception as e:
         logger.error(f"Post #{post_id}: stock photo search failed: {e}")
 

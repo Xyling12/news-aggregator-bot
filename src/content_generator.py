@@ -459,9 +459,9 @@ class ContentGenerator:
                     keywords_text = re.sub(r'<[^>]+>', '', keywords_text)
                     keywords = [kw.strip().lower() for kw in keywords_text.split(",")]
                 else:
-                    keywords = ["russian city", "winter cityscape"]
+                    keywords = ["nature landscape forest", "park trees summer"]
             except Exception:
-                keywords = ["cityscape architecture", "urban landscape"]
+                keywords = ["nature landscape forest", "park trees summer"]
 
         # Search stock — take first result that has keyword in description (no Gemini)
         try:
@@ -504,10 +504,10 @@ class ContentGenerator:
         except Exception as e:
             logger.error(f"Photo search failed ({keywords}): {e}")
 
-        # Fallback: try broader keywords
+        # Fallback: try broader keywords (no "russia" — it pulls random Moscow shots)
         if hint_keywords and len(hint_keywords) > 1:
             try:
-                fallback = [hint_keywords[0], "russia"]
+                fallback = [hint_keywords[0]]
                 photos = await self._media.search_stock_photo(fallback, count=3)
                 if photos:
                     return photos[0]["url"]
@@ -687,7 +687,7 @@ class ContentGenerator:
         elif any(w in desc_lower for w in ["облачн", "пасмурн"]):
             weather_keywords = ["cloudy sky overcast", "grey clouds nature", "cloudy day"]
         else:
-            weather_keywords = ["winter nature cold", "cold weather season", "frost morning"]
+            weather_keywords = ["overcast grey sky", "cloudy sky nature", "soft daylight clouds"]
 
         text, photo_url = await self._generate_with_photo(text, hint_keywords=weather_keywords)
         weather_data = {
