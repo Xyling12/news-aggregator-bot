@@ -899,6 +899,60 @@ class VKPublisher:
 
 
 
+    # ── Community management (status, pinned post, discussion topics, likes) ──
+    async def set_status(self, text: str) -> bool:
+        """Set the community status line."""
+        r = await self._api_call(
+            "status.set", group_id=int(self.group_id), text=text[:140],
+            _token_override=self.access_token,
+        )
+        return r is not None
+
+    async def get_board_topics(self) -> list:
+        r = await self._api_call(
+            "board.getTopics", group_id=int(self.group_id), count=100,
+            _token_override=self.access_token,
+        )
+        return (r or {}).get("items", []) if isinstance(r, dict) else []
+
+    async def add_board_topic(self, title: str, text: str = "") -> Optional[int]:
+        r = await self._api_call(
+            "board.addTopic", group_id=int(self.group_id),
+            title=title[:100], text=(text or title)[:1000], from_group=1,
+            _token_override=self.access_token,
+        )
+        # board.addTopic returns the topic id as a bare int
+        if isinstance(r, int):
+            logger.info(f"✅ VK discussion topic created: {title}")
+            return r
+        return None
+
+    async def pin_post(self, post_id: int) -> bool:
+        r = await self._api_call(
+            "wall.pin", owner_id=-int(self.group_id), post_id=post_id,
+            _token_override=self.access_token,
+        )
+        return r is not None
+
+    async def like_post(self, post_id: int) -> bool:
+        """Add one like to a community post (social proof). Uses the user token."""
+        r = await self._api_call(
+            "likes.add", type="post", owner_id=-int(self.group_id), item_id=post_id,
+            _token_override=self.user_token,
+        )
+        return r is not None
+
+    async def get_members_count(self) -> Optional[int]:
+        r = await self._api_call(
+            "groups.getById", group_id=self.group_id, fields="members_count",
+            _token_override=self.access_token,
+        )
+        try:
+            groups = r.get("groups", r) if isinstance(r, dict) else r
+            return groups[0].get("members_count")
+        except Exception:
+            return None
+
     async def test_connection(self) -> dict:
         """Test VK API connection and return group info."""
         result = {

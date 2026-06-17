@@ -16,7 +16,10 @@ from src.database import Database
 from src.channel_monitor import ChannelMonitor
 from src.ai_rewriter import AIRewriter
 from src.media_processor import MediaProcessor
-from src.bot import create_bot, process_new_post, auto_publish_loop, vk_outreach_loop, youtube_clips_loop
+from src.bot import (
+    create_bot, process_new_post, auto_publish_loop, vk_outreach_loop,
+    youtube_clips_loop, setup_vk_community, media_cleanup_loop, weekly_report_loop,
+)
 from src.content_generator import ContentGenerator
 from src.content_scheduler import ContentScheduler
 from src.vk_publisher import VKPublisher
@@ -125,6 +128,8 @@ async def main():
     publish_task = None
     outreach_task = None
     ytclips_task = None
+    cleanup_task = None
+    report_task = None
     monitor_started = False
 
     try:
@@ -161,6 +166,17 @@ async def main():
         else:
             logger.info("YouTube Clips loop idle (disabled)")
 
+        # One-time community setup (status, discussion topics, pinned welcome)
+        try:
+            await setup_vk_community()
+        except Exception as e:
+            logger.warning(f"VK community setup skipped: {e}")
+
+        # Housekeeping + analytics loops
+        cleanup_task = asyncio.create_task(media_cleanup_loop())
+        report_task = asyncio.create_task(weekly_report_loop())
+        logger.info("Media cleanup + weekly report loops started")
+
         # Start content scheduler (generates unique content on fixed schedule)
         await content_scheduler.start()
 
@@ -187,6 +203,10 @@ async def main():
             outreach_task.cancel()
         if ytclips_task:
             ytclips_task.cancel()
+        if cleanup_task:
+            cleanup_task.cancel()
+        if report_task:
+            report_task.cancel()
         await content_scheduler.stop()
         if monitor_started:
             await monitor.stop()

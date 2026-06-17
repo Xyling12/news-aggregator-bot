@@ -1581,6 +1581,11 @@ async def _publish_post(post: dict) -> bool:
             )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")
+                # Social proof: 1 like on our own post (posts otherwise look dead at 0)
+                try:
+                    await _vk_publisher.like_post(vk_post_id)
+                except Exception:
+                    pass
                 # Seed a first comment from the community to spark discussion
                 if eng_comment:
                     try:
@@ -2082,6 +2087,123 @@ async def auto_publish_loop():
         except Exception as e:
             logger.error(f"Auto-publish error: {e}")
             await asyncio.sleep(60)
+
+
+async def setup_vk_community():
+    """One-time community setup: status line, discussion topics, pinned welcome.
+    Idempotent — guarded by DB flags so it doesn't repeat on every restart."""
+    if not (_vk_publisher and _vk_publisher.enabled and _db):
+        return
+    try:
+        await _vk_publisher.set_status(
+            "📰 Новости Ижевска и Удмуртии каждый день · Прислать новость — в сообщения сообщества"
+        )
+    except Exception as e:
+        logger.warning(f"VK status set failed: {e}")
+
+    # Discussion topics (once)
+    try:
+        if not await _db.get_setting("vk_topics_created"):
+            existing = await _vk_publisher.get_board_topics()
+            if len(existing) < 2:
+                for title in (
+                    "📨 Прислать новость или фото",
+                    "❓ Вопросы и ответы",
+                    "🛒 Барахолка Ижевска",
+                ):
+                    await _vk_publisher.add_board_topic(
+                        title, f"{title}. Пишите здесь — мы читаем 👇"
+                    )
+                    await asyncio.sleep(1.0)
+            await _db.set_setting("vk_topics_created", "1")
+    except Exception as e:
+        logger.warning(f"VK topics setup failed: {e}")
+
+    # Pinned welcome post (once)
+    try:
+        if not await _db.get_setting("vk_welcome_pinned"):
+            welcome = (
+                "📰 Добро пожаловать в «Ижевск Сегодня»!\n\n"
+                "Главные новости Ижевска и Удмуртии каждый день: происшествия, "
+                "транспорт, ЖКХ, погода и всё важное для города — коротко и по делу.\n\n"
+                "📨 Есть новость или фото? Пишите в сообщения сообщества — опубликуем.\n"
+                "🔔 Подписывайтесь, чтобы быть в курсе!"
+            )
+            pid = await _vk_publisher.publish(welcome, seo_enabled=False)
+            if pid:
+                await _vk_publisher.pin_post(pid)
+                await _db.set_setting("vk_welcome_pinned", "1")
+                logger.info("✅ VK welcome post created and pinned")
+    except Exception as e:
+        logger.warning(f"VK welcome pin failed: {e}")
+
+
+async def media_cleanup_loop():
+    """Delete downloaded media (mp4/cards/stock) older than 3 days so the volume
+    doesn't fill up. Alert templates live in assets/ and are never touched."""
+    import glob
+    import time as _t
+    while True:
+        try:
+            await asyncio.sleep(6 * 3600)  # every 6h
+            if not _config:
+                continue
+            cutoff = _t.time() - 3 * 86400
+            removed = 0
+            for f in glob.glob(os.path.join(_config.media_dir, "*")):
+                try:
+                    if os.path.isfile(f) and os.path.getmtime(f) < cutoff:
+                        os.remove(f)
+                        removed += 1
+                except Exception:
+                    pass
+            if removed:
+                logger.info(f"Media cleanup: removed {removed} old files")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Media cleanup error: {e}")
+            await asyncio.sleep(600)
+
+
+async def weekly_report_loop():
+    """Send admins a weekly summary (Mon 10:00 Izhevsk): subscribers + post stats."""
+    while True:
+        try:
+            await asyncio.sleep(1800)  # check every 30 min
+            if not (_config and _db):
+                continue
+            izh = dt.now(timezone(timedelta(hours=4)))
+            if izh.weekday() != 0 or izh.hour != 10:
+                continue
+            week_key = izh.strftime("%Y-W%W")
+            if await _db.get_setting("weekly_report_sent") == week_key:
+                continue
+
+            stats = await _db.get_weekly_stats()
+            members = None
+            if _vk_publisher and _vk_publisher.enabled:
+                try:
+                    members = await _vk_publisher.get_members_count()
+                except Exception:
+                    pass
+            lines = [
+                "📊 <b>Недельный отчёт «Ижевск Сегодня»</b>",
+                f"👥 Подписчиков ВК: <b>{members if members is not None else '?'}</b>",
+                f"📝 Постов за неделю: <b>{stats.get('total', 0)}</b>",
+                f"✅ Опубликовано: {stats.get('published', 0)} · ❌ отклонено: {stats.get('rejected', 0)}",
+            ]
+            by_src = stats.get("by_source", {})
+            if by_src:
+                top = sorted(by_src.items(), key=lambda x: -x[1])[:5]
+                lines.append("📡 Источники: " + ", ".join(f"{s}×{c}" for s, c in top))
+            await _alert_admins("\n".join(lines))
+            await _db.set_setting("weekly_report_sent", week_key)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Weekly report error: {e}")
+            await asyncio.sleep(600)
 
 
 async def youtube_clips_loop():
