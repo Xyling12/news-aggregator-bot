@@ -91,6 +91,34 @@ class ContentScheduler:
         except (FileNotFoundError, json.JSONDecodeError):
             return set()
 
+    def _published_path(self) -> str:
+        import os
+        return os.path.normpath(
+            os.path.join(self.config.media_dir, "..", "data", "published_slots.json")
+        )
+
+    def _load_published(self, today_str: str) -> set:
+        """Load today's already-published slot keys (survives restarts → no dupes)."""
+        import json
+        try:
+            with open(self._published_path(), "r") as f:
+                data = json.load(f)
+            if data.get("date") == today_str:
+                return set(data.get("slots", []))
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        return set()
+
+    def _save_published(self, today_str: str) -> None:
+        """Persist today's published slot keys to disk."""
+        import json, os
+        try:
+            os.makedirs(os.path.dirname(self._published_path()), exist_ok=True)
+            with open(self._published_path(), "w") as f:
+                json.dump({"date": today_str, "slots": list(self._published_today)}, f)
+        except Exception as e:
+            logger.warning(f"Failed to save published slots: {e}")
+
     def _save_photo_history(self, new_urls: set) -> None:
         """Persist new photo URLs with today's date to disk."""
         import json, os
@@ -153,14 +181,17 @@ class ContentScheduler:
                 now = self._now()
                 today_str = now.strftime("%Y-%m-%d")
 
-                # Reset published list at midnight
+                # Reset published list at midnight (load today's from disk to survive restarts)
                 if self._last_date != today_str:
-                    self._published_today.clear()
+                    self._published_today = self._load_published(today_str)
                     self._failed_slots.clear()
                     # Reload photo history from disk (do NOT clear — dedup is persistent)
                     self._used_photo_urls = self._load_photo_history()
                     self._last_date = today_str
-                    logger.info(f"New day: {today_str}, schedule reset")
+                    logger.info(
+                        f"New day: {today_str}, schedule reset "
+                        f"({len(self._published_today)} slots already done today)"
+                    )
 
                 # Max retries for a single slot before giving up for today
                 MAX_CATCH_UP_RETRIES = 2
@@ -181,6 +212,7 @@ class ContentScheduler:
                         try:
                             await self._publish_rubric(rubric, label)
                             self._published_today.add(slot_key)
+                            self._save_published(today_str)
                             self._failed_slots.pop(slot_key, None)  # clear on success
                         except Exception as e:
                             logger.error(f"Failed to publish {rubric}: {e}", exc_info=True)
@@ -194,6 +226,7 @@ class ContentScheduler:
                                 )
                                 logger.warning(f"⛔ {rubric}: {retries} failures — marking as SKIPPED for today. Причина: {e}")
                                 self._published_today.add(slot_key)  # stop retrying
+                                self._save_published(today_str)
                                 asyncio.create_task(self._notify_admins(msg))
 
                     # Catch up: if bot was down and missed a slot (within 30 min window)
@@ -205,6 +238,7 @@ class ContentScheduler:
                         try:
                             await self._publish_rubric(rubric, label)
                             self._published_today.add(slot_key)
+                            self._save_published(today_str)
                             self._failed_slots.pop(slot_key, None)
                         except Exception as e:
                             logger.error(f"Failed catch-up {rubric}: {e}", exc_info=True)
@@ -221,6 +255,7 @@ class ContentScheduler:
                                     f"SKIPPED для сегодня. AI квота исчерпана."
                                 )
                                 self._published_today.add(slot_key)  # stop retrying
+                                self._save_published(today_str)
                                 asyncio.create_task(self._notify_admins(msg))
 
                 await asyncio.sleep(30)  # Check every 30 seconds
@@ -730,11 +765,23 @@ class ContentScheduler:
                             # Remove leading emoji-chars that might appear alone on a line
                             clean_txt = _re2.sub(r'^[\U0001F300-\U0001FAFF\s]+\n', '', clean_txt, flags=_re2.MULTILINE)
                             lines = [l.strip() for l in clean_txt.splitlines() if l.strip()]
-                            headline = lines[0] if lines else clean_txt[:120]
-                            # Strip numbered-list start if it leaked into headline (e.g. "Title  1.")
-                            headline = _re2.sub(r'\s+\d+\.\s*$', '', headline).strip()
-                            if len(headline) > 120:
-                                headline = headline[:117] + "..."
+                            if rubric == "daily_digest":
+                                # Show the actual day's items, not just "Главное за DATE"
+                                items = _re2.findall(r'^\s*\d+[\.\)]\s*(.+)$', clean_txt, flags=_re2.MULTILINE)
+                                items = [
+                                    _re2.sub(r'\s+', ' ', i).strip().rstrip('.')
+                                    for i in items if len(i.strip()) > 5
+                                ][:5]
+                                if items:
+                                    headline = "\n".join("• " + i[:64] for i in items)
+                                else:
+                                    headline = lines[0] if lines else clean_txt[:120]
+                            else:
+                                headline = lines[0] if lines else clean_txt[:120]
+                                # Strip numbered-list start if it leaked into headline
+                                headline = _re2.sub(r'\s+\d+\.\s*$', '', headline).strip()
+                                if len(headline) > 120:
+                                    headline = headline[:117] + "..."
                             
                             if len(headline) > 15:
                                 story_bytes = await self.story_generator.generate_rubric_story(

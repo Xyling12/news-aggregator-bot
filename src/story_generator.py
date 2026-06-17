@@ -359,11 +359,22 @@ class StoryGenerator:
             lw = draw.textlength(label.upper(), font=f_label)
             draw.rectangle((margin, 178, margin + lw, 184), fill=(255, 255, 255))
 
-        size = 80 if len(headline) < 90 else (66 if len(headline) < 150 else 56)
+        headline = _strip_emoji(headline or "").strip()
+        total_len = len(headline)
+        size = 76 if total_len < 80 else (62 if total_len < 170 else 50)
         f_head = ImageFont.truetype(self.font_bold_path, size)
-        line_h = size + 14
-        lines = self._wrap_story(draw, headline, f_head, W - 2 * margin)[:7]
-        y = H - 240 - len(lines) * line_h
+        line_h = size + 16
+        # Respect explicit line breaks (e.g. a digest list), then word-wrap each line
+        raw_lines = [l.strip() for l in headline.split("\n") if l.strip()]
+        lines = []
+        for rl in raw_lines:
+            lines.extend(self._wrap_story(draw, rl, f_head, W - 2 * margin))
+        lines = lines[:10]
+        block_h = len(lines) * line_h
+        if photo is not None:
+            y = H - 240 - block_h               # bottom, over the scrim
+        else:
+            y = max(300, (H - block_h) // 2)     # vertically centered text card
         for ln in lines:
             draw.text((margin, y), ln, font=f_head, fill=(255, 255, 255))
             y += line_h
