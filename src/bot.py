@@ -2094,12 +2094,6 @@ async def setup_vk_community():
     Idempotent — guarded by DB flags so it doesn't repeat on every restart."""
     if not (_vk_publisher and _vk_publisher.enabled and _db):
         return
-    try:
-        await _vk_publisher.set_status(
-            "📰 Новости Ижевска и Удмуртии каждый день · Прислать новость — в сообщения сообщества"
-        )
-    except Exception as e:
-        logger.warning(f"VK status set failed: {e}")
 
     # Discussion topics (once)
     try:
