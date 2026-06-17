@@ -1309,6 +1309,52 @@ _ALERT_FILES = {
 _ALERT_CANCEL = ("отмен", "отбой", "сняли", "снят", "миновал", "завершён", "завершен")
 
 
+# News category → (label, card colour, "stock"|"card").
+# "stock" = real photo is safe (no Izhevsk-specific framing); "card" = branded card
+# (stock would return a random foreign city, which we never want for local news).
+_NEWS_CATEGORIES = [
+    (("дтп", "авар", "пожар", "полиц", "суд ", "суда", "осуд", "кража", "мошен",
+      "задержа", "арест", "происш", "погиб", "пострад", "ножев", "взлом", "наезд"),
+     ("Происшествия", (176, 42, 46), "card")),
+    (("трамва", "троллейбус", "автобус", "маршрут", "дорог", "транспорт", "пробк",
+      "остановк", "перекрыт", "тротуар"),
+     ("Транспорт", (33, 79, 140), "card")),
+    (("мэр", "глава города", "депутат", "госсовет", "администрац", "бюджет",
+      "губернат", "власт", "чиновник", "министр", "госдум", "выбор"),
+     ("Власть", (40, 54, 85), "card")),
+    (("жкх", "отоплен", "коммунал", "водоснаб", "тариф", "электроснаб", "газоснаб",
+      "капремонт", "управляющ"),
+     ("ЖКХ", (20, 110, 110), "card")),
+    (("цена", "подорожал", "зарплат", "налог", "бизнес", "эконом", "инфляц",
+      "кредит", "ипотек", "пенси", "пособи"),
+     ("Экономика", (150, 90, 30), "card")),
+    (("школ", "детсад", "вуз", "универ", "образован", "ученик", "студент", "егэ"),
+     ("Образование", (70, 90, 150), "card")),
+    (("больниц", "поликлин", "врач", "медиц", "здоров", "вакцин", "госпитал"),
+     ("Здоровье", (28, 120, 92), "card")),
+    (("театр", "концерт", "выставк", "фестивал", "культур", "музей", "кино", "премьер"),
+     ("Культура", (120, 50, 130), "card")),
+    (("спорт", "матч", "турнир", "чемпион", "соревнов", "стадион"),
+     ("Спорт", (35, 100, 60), "card")),
+    # photo-friendly — real stock is fine and not tied to a recognizable city
+    (("погод", "температур", "прогноз", "осадк", "дожд", "снег", "мороз", "гроза", "ветер"),
+     ("Погода", None, "stock")),
+    (("природ", "лес", "река", "парк", "животн", "птиц", "рыбал", "озер", "сад", "урожай"),
+     ("Природа", None, "stock")),
+]
+_DEFAULT_CATEGORY = ("Новости", (45, 55, 75), "card")
+_CIVIC_CATEGORIES = {"Транспорт", "ЖКХ", "Экономика", "Власть"}
+
+
+def _detect_news_category(text: str):
+    """Return (label, card_color, mode) for a news text."""
+    t = (text or "").lower()
+    for triggers, cat in _NEWS_CATEGORIES:
+        if any(k in t for k in triggers):
+            return cat
+    return _DEFAULT_CATEGORY
+
+
 def _pick_alert_image(text: str) -> Optional[str]:
     """Return a local official-style template path for an emergency post, or None.
 
@@ -1512,7 +1558,10 @@ async def _publish_post(post: dict) -> bool:
                     engagement = await _rewriter.generate_engagement(eng_source)
                     eng_comment = engagement.get("comment")
                     poll = engagement.get("poll")
-                    if poll and poll.get("options"):
+                    # Polls only on civic topics (transport/ЖКХ/economy/власть) — where
+                    # readers actually have an opinion; not on every post.
+                    cat_label, _c, _m = _detect_news_category(eng_source)
+                    if poll and poll.get("options") and cat_label in _CIVIC_CATEGORIES:
                         poll_attachment = await _vk_publisher.create_poll(
                             poll["question"], poll["options"]
                         )
@@ -1871,39 +1920,49 @@ async def process_new_post(post_id: int):
                 # Original photo from source — allowed only when USE_SOURCE_MEDIA=true and clean.
                 logger.info(f"Post #{post_id}: using original source photo (no watermark)")
             else:
-                # Need stock: either source disabled, watermark replacement, or no photo at all
-                keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
-
-                if keywords and len(keywords) >= 2:
-                    stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
-
-                    if stock_photos:
-                        # Take first result not already used globally (dedup across parallel posts)
-                        async with _used_stock_urls_lock:
-                            chosen = None
-                            for candidate in stock_photos:
-                                url = candidate.get("url", "")
-                                if url and url not in _used_stock_urls:
-                                    chosen = candidate
-                                    _used_stock_urls.add(url)
-                                    # Keep set bounded to last 500 entries
-                                    if len(_used_stock_urls) > 500:
-                                        _used_stock_urls.pop()
-                                    break
-                            if not chosen:
-                                chosen = stock_photos[0]  # All used → reuse first as fallback
-
-                        desc = chosen.get("description", "")
-                        kw_match = any(kw.lower() in desc.lower() for kw in keywords[:3]) if desc else False
-                        stock_url = chosen["url"]
-                        logger.info(
-                            f"Post #{post_id}: stock photo selected from {chosen.get('source', 'unknown')} "
-                            f"(kw_match={kw_match}, keywords={keywords[:3]})"
-                        )
+                # No usable source photo. Mix strategy:
+                #   • photo-friendly topics (weather/nature) → real stock photo
+                #   • everything local (city/court/власть/ДТП…) → branded headline card,
+                #     because stock has no Izhevsk and returns random foreign cities.
+                cat_label, cat_color, cat_mode = _detect_news_category(
+                    original_text + " " + (rewritten or "")
+                )
+                if cat_mode == "stock":
+                    keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
+                    if keywords and len(keywords) >= 2:
+                        stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
+                        if stock_photos:
+                            async with _used_stock_urls_lock:
+                                chosen = None
+                                for candidate in stock_photos:
+                                    url = candidate.get("url", "")
+                                    if url and url not in _used_stock_urls:
+                                        chosen = candidate
+                                        _used_stock_urls.add(url)
+                                        if len(_used_stock_urls) > 500:
+                                            _used_stock_urls.pop()
+                                        break
+                                if not chosen:
+                                    chosen = stock_photos[0]
+                            stock_url = chosen["url"]
+                            logger.info(
+                                f"Post #{post_id}: stock photo ({cat_label}) from "
+                                f"{chosen.get('source', '?')}, keywords={keywords[:3]}"
+                            )
+                        else:
+                            logger.info(f"Post #{post_id}: no stock photos found — text-only")
                     else:
-                        logger.info(f"Post #{post_id}: no stock photos found — publishing text-only")
+                        logger.info(f"Post #{post_id}: insufficient keywords for stock — text-only")
                 else:
-                    logger.info(f"Post #{post_id}: insufficient keywords for stock search — text-only")
+                    # Branded headline card — always on-topic, never a foreign city
+                    try:
+                        from src.card_maker import make_news_card
+                        card_path = os.path.join(_config.media_dir, f"card_{post_id}.jpg")
+                        make_news_card(rewritten or original_text, cat_label, cat_color, card_path)
+                        await _db.set_local_media_override(post_id, card_path)
+                        logger.info(f"Post #{post_id}: branded card ({cat_label}) — no local photo source")
+                    except Exception as ce:
+                        logger.error(f"Post #{post_id}: card generation failed: {ce}")
 
             if stock_url:
                 await _db.update_post_media(post_id, replacement_url=stock_url)
