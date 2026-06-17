@@ -295,164 +295,93 @@ class StoryGenerator:
             logger.error(f"Rubric story ({rubric}) failed: {e}")
             return None
 
+    # Clean unified story style → (background colour, label)
+    _CLEAN_STORY = {
+        "fact": ((64, 42, 110), "А знаете ли вы?"),
+        "weather": ((26, 82, 150), "Погода"),
+        "history": ((74, 56, 36), "История Ижевска"),
+        "recipe": ((140, 72, 24), "Рецепт дня"),
+        "lifehack": ((20, 104, 82), "Полезное"),
+        "place": ((26, 92, 66), "Места Удмуртии"),
+        "news": ((150, 38, 38), "Новости"),
+        "evening": ((26, 22, 72), "Вечерний Ижевск"),
+        "digest": ((30, 46, 96), "Главное за день"),
+        "five_facts": ((92, 32, 112), "5 фактов"),
+        "holiday": ((124, 32, 72), "Праздник"),
+    }
+
+    @staticmethod
+    def _wrap_story(draw, text, font, max_w):
+        words = text.split()
+        lines, cur = [], ""
+        for w in words:
+            t = (cur + " " + w).strip()
+            if draw.textlength(t, font=font) <= max_w:
+                cur = t
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        return lines
+
+    def _render_clean_story(self, headline: str, label: Optional[str],
+                            photo: Optional[Image.Image] = None,
+                            bg_color=(30, 40, 70)) -> bytes:
+        """Clean modern 9:16 story: photo + bottom scrim + label + headline + brand.
+        Solid brand-colour background when no photo. No orbs/glow/glass."""
+        W, H = 1080, 1920
+        headline = _strip_emoji(headline or "").strip()
+
+        if photo is not None:
+            base = self._crop_and_resize(photo, W, H).convert("RGBA")
+            scrim = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(scrim)
+            b_start = int(H * 0.40)
+            for y in range(b_start, H):
+                a = min(int(240 * (y - b_start) / (H - b_start)), 240)
+                sd.line([(0, y), (W, y)], fill=(0, 0, 0, a))
+            top_h = int(H * 0.16)
+            for y in range(top_h):
+                sd.line([(0, y), (W, y)], fill=(0, 0, 0, int(110 * (1 - y / top_h))))
+            base = Image.alpha_composite(base, scrim)
+        else:
+            base = Image.new("RGBA", (W, H), (*bg_color, 255))
+
+        draw = ImageDraw.Draw(base)
+        margin = 80
+        f_label = ImageFont.truetype(self.font_bold_path, 44)
+        f_brand = ImageFont.truetype(self.font_bold_path, 38)
+
+        if label:
+            draw.text((margin, 120), label.upper(), font=f_label, fill=(255, 255, 255))
+            lw = draw.textlength(label.upper(), font=f_label)
+            draw.rectangle((margin, 178, margin + lw, 184), fill=(255, 255, 255))
+
+        size = 80 if len(headline) < 90 else (66 if len(headline) < 150 else 56)
+        f_head = ImageFont.truetype(self.font_bold_path, size)
+        line_h = size + 14
+        lines = self._wrap_story(draw, headline, f_head, W - 2 * margin)[:7]
+        y = H - 240 - len(lines) * line_h
+        for ln in lines:
+            draw.text((margin, y), ln, font=f_head, fill=(255, 255, 255))
+            y += line_h
+
+        draw.rectangle((margin, H - 150, margin + 56, H - 144), fill=(255, 255, 255))
+        draw.text((margin, H - 132), "ИЖЕВСК СЕГОДНЯ", font=f_brand, fill=(255, 255, 255))
+
+        out = base.convert("RGB")
+        buf = io.BytesIO()
+        out.save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
+
     async def _generate_rubric_story_inner(
         self, text: str, rubric: str, photo_url: Optional[str]
     ) -> Optional[bytes]:
-        import textwrap
-        # Strip emoji — Roboto font can't render them (shows □ boxes)
-        text = _strip_emoji(text)
-        W, H = 1080, 1920
-
-        theme = RUBRIC_THEMES.get(rubric, RUBRIC_THEMES["fact"])
-        gt = theme["grad_top"]
-        gm = theme["grad_mid"]
-        gb = theme["grad_bot"]
-        accent = theme["accent"]
-        orb_base = theme["orb_base"]
-        header = theme["header"]
-        bar_style = theme.get("bar_style", "lines")
-
-        # ── 1. THREE-STOP GRADIENT ──
-        base_img = Image.new("RGBA", (W, H))
-        draw_bg = ImageDraw.Draw(base_img)
-        for y in range(H):
-            t = y / H
-            if t < 0.5:
-                t2 = t * 2
-                r = int(gt[0] + (gm[0] - gt[0]) * t2)
-                g = int(gt[1] + (gm[1] - gt[1]) * t2)
-                b = int(gt[2] + (gm[2] - gt[2]) * t2)
-            else:
-                t2 = (t - 0.5) * 2
-                r = int(gm[0] + (gb[0] - gm[0]) * t2)
-                g = int(gm[1] + (gb[1] - gm[1]) * t2)
-                b = int(gm[2] + (gb[2] - gm[2]) * t2)
-            draw_bg.line([(0, y), (W, y)], fill=(r, g, b, 255))
-
-        # ── 2. GLOWING ORBS ──
-        orbs_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        orb_positions = [
-            (180, 300, 200, 25), (900, 500, 160, 20),
-            (540, 1400, 250, 18), (100, 1600, 180, 15), (950, 1700, 130, 20),
-        ]
-        for cx, cy, radius, base_alpha in orb_positions:
-            for ring in range(radius, 0, -2):
-                alpha = int(base_alpha * (ring / radius))
-                orb_draw = ImageDraw.Draw(orbs_layer)
-                orb_draw.ellipse(
-                    [(cx - ring, cy - ring), (cx + ring, cy + ring)],
-                    fill=(orb_base[0], orb_base[1], orb_base[2], alpha)
-                )
-        base_img = Image.alpha_composite(base_img, orbs_layer)
-
-        # ── 3. BACKGROUND PHOTO (primary — photo is the main visual) ──
-        if photo_url:
-            photo = await self._download_image(photo_url)
-            if photo:
-                photo = self._crop_and_resize(photo, W, H).convert("RGBA")
-                # Photo is the PRIMARY background — high opacity (200/255 ≈ 78%)
-                photo.putalpha(200)
-                base_img = Image.alpha_composite(base_img, photo)
-                # Add a colored tint overlay so gradient theme is still felt
-                tint = Image.new("RGBA", (W, H), (*gm, 80))
-                base_img = Image.alpha_composite(base_img, tint)
-
-        # ── 4. TOP VIGNETTE ──
-        vignette = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        vignette_draw = ImageDraw.Draw(vignette)
-        for y in range(400):
-            alpha = int(80 * (1 - y / 400))
-            vignette_draw.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
-        base_img = Image.alpha_composite(base_img, vignette)
-
-        combined = base_img
-        draw = ImageDraw.Draw(combined)
-
-        # 5. FONTS ──
-        try:
-            font_title = ImageFont.truetype(self.font_bold_path, 52)
-            font_q = ImageFont.truetype(self.font_bold_path, 52)
-            font_brand = ImageFont.truetype(self.font_reg_path, 32)
-        except:
-            font_title = font_q = font_brand = ImageFont.load_default()
-
-        def draw_text_glow(draw_obj, pos, txt, font, text_color, glow_color=(0,0,0,120), offset=3):
-            x, y = pos
-            for dx, dy in [(-1,-1),(1,-1),(-1,1),(1,1),(0,2),(2,0)]:
-                draw_obj.text((x + dx*offset, y + dy*offset), txt, font=font, fill=glow_color)
-            draw_obj.text((x, y), txt, font=font, fill=text_color)
-
-        # ── 6. HEADER DECORATION ──
-        accent_rgba = (*accent, 200)
-        if bar_style == "bars":
-            draw.rectangle([(0, 180), (W, 188)], fill=(*accent, 200))
-            th_w = draw.textlength(header, font=font_title)
-            draw_text_glow(draw, ((W - th_w) // 2, 210), header, font=font_title, text_color=(*accent, 255))
-            draw.rectangle([(0, 280), (W, 288)], fill=(*accent, 200))
-        else:
-            line_w = 200
-            draw.line([(W//2 - line_w, 220), (W//2 + line_w, 220)], fill=accent_rgba, width=3)
-            th_w = draw.textlength(header, font=font_title)
-            draw_text_glow(draw, ((W - th_w) // 2, 245), header, font=font_title, text_color=(*accent, 255))
-            draw.line([(W//2 - line_w, 325), (W//2 + line_w, 325)], fill=accent_rgba, width=3)
-
-        # ── 7. WORD WRAP ──
-        lines = textwrap.wrap(text, width=32)
-        if len(lines) > 8:
-            lines = textwrap.wrap(text, width=38)
-            try:
-                font_q = ImageFont.truetype(self.font_bold_path, 44)
-            except:
-                pass
-
-        # ── 8. FROSTED GLASS CARD ──
-        line_h = 70
-        line_spacing = 12
-        total_text_h = len(lines) * line_h + (len(lines) - 1) * line_spacing
-        start_y = 400 if bar_style == "lines" else 350
-        box_x1, box_x2 = 60, W - 60
-        box_y1 = start_y - 45
-        box_y2 = start_y + total_text_h + 45
-
-        glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        glass_draw = ImageDraw.Draw(glass)
-        glass_draw.rounded_rectangle(
-            [(box_x1 - 4, box_y1 - 4), (box_x2 + 4, box_y2 + 4)],
-            radius=28, fill=(255, 255, 255, 8)
-        )
-        glass_draw.rounded_rectangle(
-            [(box_x1, box_y1), (box_x2, box_y2)],
-            radius=24, fill=(255, 255, 255, 22)
-        )
-        border_color = (*accent[:3], 40) if bar_style == "bars" else (255, 255, 255, 50)
-        glass_draw.rounded_rectangle(
-            [(box_x1, box_y1), (box_x2, box_y2)],
-            radius=24, fill=None, outline=border_color, width=2
-        )
-        combined = Image.alpha_composite(combined, glass)
-        draw = ImageDraw.Draw(combined)
-
-        # ── 9. TEXT ──
-        y_text = start_y
-        for line in lines:
-            lw = draw.textlength(line, font=font_q)
-            draw_text_glow(
-                draw, ((W - lw) // 2, y_text), line, font=font_q,
-                text_color=(255, 255, 255, 255), glow_color=(0, 0, 0, 100), offset=2
-            )
-            y_text += line_h + line_spacing
-
-        # ── 10. BRAND WATERMARK ──
-        brand = "ИЖЕВСК СЕГОДНЯ"
-        bw = draw.textlength(brand, font=font_brand)
-        draw.text(((W - bw) // 2, H - 120), brand, font=font_brand, fill=(255, 255, 255, 80))
-        draw.ellipse([(W//2 - 4, H - 80), (W//2 + 4, H - 72)], fill=(*accent, 120))
-
-        # ── OUTPUT ──
-        final_img = combined.convert("RGB")
-        out_bytes = io.BytesIO()
-        final_img.save(out_bytes, format="JPEG", quality=92)
-        return out_bytes.getvalue()
+        bg_color, label = self._CLEAN_STORY.get(rubric, self._CLEAN_STORY["fact"])
+        photo = await self._download_image(photo_url) if photo_url else None
+        return self._render_clean_story(text, label, photo=photo, bg_color=bg_color)
 
     # ── Convenience wrappers (backward compat) ───────────────────────────
 
@@ -465,136 +394,62 @@ class StoryGenerator:
         return await self.generate_rubric_story(headline, rubric="news", photo_url=photo_url)
 
     async def generate_cat_story(self, hour: int = -1) -> Optional[bytes]:
-        """
-        Fetch a random cat from TheCatAPI, crop to 9:16, add time-appropriate text.
-        
-        Args:
-            hour: Current hour (0-23) in local timezone. Used to pick appropriate
-                  greeting text (morning/afternoon/night). Default -1 = auto-detect.
-        """
+        """A feel-good cat story. High-quality photo from Pexels (TheCatAPI as
+        fallback), time-aware greeting, clean unified style."""
         from datetime import datetime, timezone, timedelta
-        W, H = 1080, 1920
-
-        # Auto-detect hour if not provided
-        if hour < 0:
-            tz_izhevsk = timezone(timedelta(hours=4))
-            hour = datetime.now(tz_izhevsk).hour
-
-        # Request full-size high-quality photos, no GIFs
-        cat_api_url = (
-            "https://api.thecatapi.com/v1/images/search"
-            "?limit=10&mime_types=image/jpeg,image/png&size=full"
-        )
-
-        cat_img_url = None
-        try:
-            headers = {"User-Agent": "IzhevskTodayNewsBot/1.0"}
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(cat_api_url, timeout=10) as resp:
-                    if resp.status == 200:
-                        candidates = await resp.json()
-                        # Only high-res photos (min 800px on shortest side)
-                        hq = [c for c in candidates
-                              if min(c.get("width", 0), c.get("height", 0)) >= 800]
-                        pool = hq if hq else candidates
-                        # Prefer horizontal/square — crop better to 9:16
-                        wide = [c for c in pool if c.get("width", 0) >= c.get("height", 1)]
-                        pool = wide if wide else pool
-                        if pool:
-                            import random as _r
-                            cat_img_url = _r.choice(pool[:5])["url"]
-        except Exception as e:
-            logger.error(f"Failed to fetch cat API: {e}")
-            cat_img_url = None
-
-        if cat_img_url:
-            base_img = await self._download_image(cat_img_url)
-        else:
-            base_img = None
-            
-        if not base_img:
-            return None # Skip if no cat found
-
-        base_img = self._crop_and_resize(base_img, W, H)
-        
-        # Darken the whole image slightly for premium feel
-        dark_overlay = Image.new("RGBA", (W, H), (0, 0, 0, 40))
-        base_img = base_img.convert("RGBA")
-        combined = Image.alpha_composite(base_img, dark_overlay)
-        
-        draw = ImageDraw.Draw(combined)
-        try:
-            font_title = ImageFont.truetype(self.font_bold_path, 80)
-            font_brand = ImageFont.truetype(self.font_reg_path, 40)
-        except:
-            font_title = ImageFont.load_default()
-            font_brand = ImageFont.load_default()
-
-        # Time-aware text selection (no emojis for PIL safety)
         import random
-        if hour >= 20:  # Evening/night (22:00 slot)
-            texts = [
-                "Спокойной ночи, Ижевск!",
-                "Сладких снов!",
-                "Добрых снов, Ижевск!",
-                "Ночь. Котики. Покой.",
-            ]
-        elif hour >= 12:  # Afternoon (14:00 slot)
-            texts = [
-                "Время немножко отдохнуть",
-                "Котиков много не бывает",
-                "Пуньк!",
-                "Мяу!",
-                "Обеденный котик!",
-            ]
-        else:  # Morning (10:00 slot)
-            texts = [
-                "Всем хорошего дня!",
-                "Доброе утро, Ижевск!",
-                "Котиков много не бывает",
-                "Мяу!",
-                "Пуньк!",
-            ]
-        text_str = random.choice(texts)
-        tw = draw.textlength(text_str, font=font_title)
-        
-        # Draw Glass Pill for the text
-        pill_w = tw + 120
-        pill_h = 160
-        pill_x1 = (W - pill_w) // 2
-        pill_y1 = 1550
-        pill_x2 = pill_x1 + pill_w
-        pill_y2 = pill_y1 + pill_h
-        
-        glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        glass_draw = ImageDraw.Draw(glass)
-        
-        # Outer light border
-        glass_draw.rounded_rectangle(
-            [(pill_x1 - 4, pill_y1 - 4), (pill_x2 + 4, pill_y2 + 4)],
-            radius=50, fill=(255, 255, 255, 20)
-        )
-        # Inner dark glass
-        glass_draw.rounded_rectangle(
-            [(pill_x1, pill_y1), (pill_x2, pill_y2)],
-            radius=46, fill=(0, 0, 0, 140)
-        )
-        
-        combined = Image.alpha_composite(combined, glass)
-        draw = ImageDraw.Draw(combined)
-        
-        # Text centered in pill
-        draw.text(((W - tw) // 2, pill_y1 + 35), text_str, font=font_title, fill=(255, 255, 255, 255))
-        
-        # Brand watermark at the very bottom
-        brand = "ИЖЕВСК СЕГОДНЯ"
-        bw = draw.textlength(brand, font=font_brand)
-        draw.text(((W - bw) // 2, 1780), brand, font=font_brand, fill=(255, 255, 255, 120))
-        
-        final_img = combined.convert("RGB")
-        out_bytes = io.BytesIO()
-        final_img.save(out_bytes, format="JPEG", quality=90)
-        return out_bytes.getvalue()
+
+        if hour < 0:
+            hour = datetime.now(timezone(timedelta(hours=4))).hour
+
+        # 1) Prefer Pexels — far better quality than TheCatAPI's random uploads
+        photo = None
+        try:
+            from src.media_processor import MediaProcessor
+            mp = MediaProcessor(
+                pexels_key=os.getenv("PEXELS_API_KEY", ""),
+                pixabay_key=os.getenv("PIXABAY_API_KEY", ""),
+            )
+            query = random.choice([
+                ["cute cat portrait"], ["kitten cozy home"],
+                ["cat sunlight window"], ["fluffy cat close up"], ["sleeping cat blanket"],
+            ])
+            photos = await mp.search_stock_photo(query, count=8)
+            if photos:
+                url = random.choice(photos[:6])["url"]
+                photo = await self._download_image(url)
+        except Exception as e:
+            logger.warning(f"Cat story: Pexels fetch failed ({e}), trying TheCatAPI")
+
+        # 2) Fallback: TheCatAPI (high-res only)
+        if photo is None:
+            try:
+                headers = {"User-Agent": "IzhevskTodayNewsBot/1.0"}
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(
+                        "https://api.thecatapi.com/v1/images/search"
+                        "?limit=10&mime_types=image/jpeg,image/png&size=full",
+                        timeout=10,
+                    ) as resp:
+                        if resp.status == 200:
+                            cands = await resp.json()
+                            hq = [c for c in cands if min(c.get("width", 0), c.get("height", 0)) >= 1000]
+                            pool = hq or cands
+                            if pool:
+                                photo = await self._download_image(random.choice(pool[:5])["url"])
+            except Exception as e:
+                logger.error(f"Cat story: TheCatAPI failed: {e}")
+
+        if photo is None:
+            return None
+
+        if hour >= 20:
+            texts = ["Спокойной ночи, Ижевск", "Сладких снов", "Ночь. Котики. Покой"]
+        elif hour >= 12:
+            texts = ["Котиков много не бывает", "Минутка позитива", "Обеденный котик"]
+        else:
+            texts = ["Доброе утро, Ижевск", "Всем хорошего дня", "Котиков много не бывает"]
+        return self._render_clean_story(random.choice(texts), label=None, photo=photo)
 
     async def generate_video_story(self, video_url: str, text: str, output_path: str = "story_temp.mp4", music_url: Optional[str] = None) -> Optional[str]:
         """

@@ -29,16 +29,14 @@ logger = logging.getLogger(__name__)
 TZ_IZHEVSK = timezone(timedelta(hours=4))
 
 # ── Schedule: (hour, minute) -> rubric method name ───────────────────────
+# Trimmed: stories were flooding the VK feed (~20/day). Now ~4-5/day total —
+# weather + digest stories (gated below), 1 cat story, plus up to 2 top-news stories.
 DEFAULT_SCHEDULE = [
     (7,  0,  "weather",       "🌤 Погода"),
     (8,  0,  "holiday",       "🎉 Праздник"),
-    (10, 0,  "cat_story",     "🐾 Котики (VK Story)"),
-    (12, 0,  "video_story",   "🎥 Видео-факт (VK Story)"),
-    (14, 0,  "cat_story",     "🐾 Котики (VK Story)"),
-    (16, 0,  "fact_story",    "❓ Факт (VK Story)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
+    (20, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
-    (22, 0,  "cat_story",     "🐾 Котики (VK Story)"),
 ]
 
 
@@ -714,6 +712,9 @@ class ContentScheduler:
                         "holiday": "holiday",
                     }
                     theme_name = _RUBRIC_TO_THEME.get(rubric)
+                    # Only weather + daily digest become VK stories (no story-spam under every rubric)
+                    if rubric not in ("weather", "daily_digest"):
+                        theme_name = None
                     if theme_name and text:
                         try:
                             if not hasattr(self, 'story_generator'):

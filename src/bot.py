@@ -1594,27 +1594,29 @@ async def _publish_post(post: dict) -> bool:
     elif _vk_publisher and not _vk_publisher.enabled:
         logger.debug("VK crosspost skipped: token or group_id not configured")
 
-    # ── Publish as VK Story ────────────────────────────────────────────────
+    # ── Publish as VK Story (only the first 2 news/day — no story-spam) ─────
     if _vk_publisher and _vk_publisher.enabled and _story_generator:
         try:
-            # Extract first sentence or first 100 chars as headline for story
-            raw_text = re.sub(r'<[^>]+>', '', text)  # strip HTML tags
-            raw_text = re.sub(r'#\S+', '', raw_text).strip()  # strip hashtags
-            # Take first sentence or first 120 chars
-            first_sentence = raw_text.split('.')[0].strip() if '.' in raw_text[:150] else raw_text[:120]
-            if len(first_sentence) > 15:  # only if headline is meaningful
-                photo_for_story = post.get("replacement_media_url")
-                story_bytes = await _story_generator.generate_news_story(
-                    first_sentence, photo_url=photo_for_story
-                )
-                if story_bytes:
-                    story_result = await _vk_publisher.upload_story_photo(story_bytes)
-                    if story_result:
-                        logger.info(f"Post #{post['id']}: VK Story published!")
-                    else:
-                        logger.warning(f"Post #{post['id']}: VK Story upload failed")
-                else:
-                    logger.warning(f"Post #{post['id']}: news story image generation failed")
+            _day_key = dt.now(timezone(timedelta(hours=4))).strftime("%Y-%m-%d")
+            news_stories_today = await _db.get_daily_counter("newsstory", _day_key)
+            if news_stories_today >= 2:
+                logger.debug(f"Post #{post['id']}: news-story daily cap reached, skipping story")
+            else:
+                raw_text = re.sub(r'<[^>]+>', '', text)
+                raw_text = re.sub(r'#\S+', '', raw_text).strip()
+                first_sentence = raw_text.split('.')[0].strip() if '.' in raw_text[:150] else raw_text[:120]
+                if len(first_sentence) > 15:
+                    photo_for_story = post.get("replacement_media_url")
+                    story_bytes = await _story_generator.generate_news_story(
+                        first_sentence, photo_url=photo_for_story
+                    )
+                    if story_bytes:
+                        story_result = await _vk_publisher.upload_story_photo(story_bytes)
+                        if story_result:
+                            await _db.bump_daily_counter("newsstory", _day_key)
+                            logger.info(f"Post #{post['id']}: VK Story published!")
+                        else:
+                            logger.warning(f"Post #{post['id']}: VK Story upload failed")
         except Exception as e:
             logger.error(f"VK Story error for post #{post['id']}: {e}")
 
