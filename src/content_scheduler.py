@@ -506,6 +506,11 @@ class ContentScheduler:
             published = await self.db.get_today_published_texts()
             text, photo_url = await self.generator.generate_daily_digest(published)
 
+        # No local Izhevsk photos exist → stock returns foreign cities (Moscow/SPB)
+        # for the day's digest and "Места". Drop the stock photo → branded card below.
+        if rubric in ("daily_digest", "place"):
+            photo_url = None
+
         if not text:
             logger.warning(f"Content generation returned empty for {rubric} — Gemini may be rate-limited")
             raise RuntimeError(f"AI вернул пустой текст для '{label}'. Возможно, квота Gemini исчерпана — попробуй позже.")
@@ -575,7 +580,29 @@ class ContentScheduler:
         CAPTION_LIMIT = 900  # safe threshold below 1024
         
         fallback_path = None
-        if not photo_url and rubric not in ("holiday", "cat_clip", "cat_story", "video_story", "fact_story", "daily_digest"):
+
+        # Branded landscape card for rubrics where stock returns the wrong city
+        if rubric in ("daily_digest", "place"):
+            try:
+                from src.card_maker import make_news_card
+                import os, re as _rc
+                if rubric == "daily_digest":
+                    label = "Главное за день"
+                    title = "Итоги дня · " + self._now().strftime("%d.%m.%Y")
+                    color = (30, 46, 96)
+                else:
+                    label = "Места Удмуртии"
+                    _pt = _rc.sub(r'<[^>]+>', '', text).strip().splitlines()
+                    title = (_pt[0] if _pt else "Место в Удмуртии")[:90]
+                    color = (26, 92, 66)
+                card_path = os.path.join(self.config.media_dir, f"rubric_card_{rubric}.jpg")
+                os.makedirs(self.config.media_dir, exist_ok=True)
+                make_news_card(title, label, color, card_path)
+                fallback_path = card_path
+            except Exception as ce:
+                logger.warning(f"{rubric}: card generation failed: {ce}")
+
+        if not fallback_path and not photo_url and rubric not in ("holiday", "cat_clip", "cat_story", "video_story", "fact_story", "daily_digest"):
             try:
                 logger.info(f"{rubric}: photo search returned None. Generating gradient text image as fallback.")
                 if not hasattr(self, 'story_generator'):
