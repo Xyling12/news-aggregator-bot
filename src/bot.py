@@ -1519,6 +1519,7 @@ async def _publish_post(post: dict) -> bool:
         logger.warning(f"Post #{post['id']}: reaction failed ({react_err})")
 
     # ── Cross-post to VK ──────────────────────────────────────────────────
+    vk_post_id = None
     if _vk_publisher and _vk_publisher.enabled:
         try:
             photo_for_vk_url = post.get("replacement_media_url")
@@ -1621,7 +1622,13 @@ async def _publish_post(post: dict) -> bool:
                         first_sentence, photo_url=photo_for_story
                     )
                     if story_bytes:
-                        story_result = await _vk_publisher.upload_story_photo(story_bytes)
+                        _story_link = (
+                            f"https://vk.com/wall-{_vk_publisher.group_id}_{vk_post_id}"
+                            if vk_post_id else "https://vk.com/izhevsk_segodnya"
+                        )
+                        story_result = await _vk_publisher.upload_story_photo(
+                            story_bytes, link_text="learn_more", link_url=_story_link
+                        )
                         if story_result:
                             await _db.bump_daily_counter("newsstory", _day_key)
                             logger.info(f"Post #{post['id']}: VK Story published!")

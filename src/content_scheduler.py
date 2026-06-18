@@ -730,8 +730,12 @@ class ContentScheduler:
                                 vk_photo_path = _local
                         except Exception as _dl_err:
                             logger.warning(f"VK photo pre-download failed: {_dl_err}")
-                    await vk.publish(text, photo_url=photo_url if not vk_photo_path else None, photo_path=vk_photo_path)
+                    vk_post_id = await vk.publish(text, photo_url=photo_url if not vk_photo_path else None, photo_path=vk_photo_path)
                     logger.info(f"✅ VK crosspost: {label}")
+                    story_link = (
+                        f"https://vk.com/wall-{vk.group_id}_{vk_post_id}"
+                        if vk_post_id else "https://vk.com/izhevsk_segodnya"
+                    )
                     
                     # ── Publish VK Story for ALL text-based rubrics ──
                     # Map scheduler rubric names → story theme names
@@ -766,12 +770,20 @@ class ContentScheduler:
                             clean_txt = _re2.sub(r'^[\U0001F300-\U0001FAFF\s]+\n', '', clean_txt, flags=_re2.MULTILINE)
                             lines = [l.strip() for l in clean_txt.splitlines() if l.strip()]
                             if rubric == "daily_digest":
-                                # Show the actual day's items, not just "Главное за DATE"
-                                items = _re2.findall(r'^\s*\d+[\.\)]\s*(.+)$', clean_txt, flags=_re2.MULTILINE)
-                                items = [
-                                    _re2.sub(r'\s+', ' ', i).strip().rstrip('.')
-                                    for i in items if len(i.strip()) > 5
-                                ][:5]
+                                # Digest items are emoji-bulleted lines (🚍 ... 💰 ...),
+                                # not numbered — pull those, skip title/commentary/hashtags.
+                                _EMO = ("\U0001F000-\U0001FAFF☀-➿⬀-⯿"
+                                        "←-⇿⌀-⏿️")
+                                items = []
+                                for ln in text.splitlines():
+                                    ln = _re2.sub(r'<[^>]+>', '', ln).strip()
+                                    if not ln or 'Главное за' in ln or ln.startswith('#'):
+                                        continue
+                                    if _re2.match(f'^[{_EMO}]', ln):
+                                        clean = _re2.sub(f'^[{_EMO}\\s]+', '', ln).strip().rstrip('.')
+                                        if len(clean) > 12:
+                                            items.append(_re2.sub(r'\s+', ' ', clean))
+                                items = items[:5]
                                 if items:
                                     headline = "\n".join("• " + i[:64] for i in items)
                                 else:
@@ -791,7 +803,7 @@ class ContentScheduler:
                                     s_res = await vk.upload_story_photo(
                                         story_bytes,
                                         link_text="learn_more",
-                                        link_url="https://vk.com/izhevsk_segodnya"
+                                        link_url=story_link,
                                     )
                                     if s_res:
                                         logger.info(f"✅ VK {label} Story published")

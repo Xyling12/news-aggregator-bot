@@ -425,7 +425,7 @@ class StoryGenerator:
                 ["cute cat portrait"], ["kitten cozy home"],
                 ["cat sunlight window"], ["fluffy cat close up"], ["sleeping cat blanket"],
             ])
-            photos = await mp.search_stock_photo(query, count=8)
+            photos = await mp.search_stock_photo(query, count=8, orientation="portrait")
             if photos:
                 url = random.choice(photos[:6])["url"]
                 photo = await self._download_image(url)

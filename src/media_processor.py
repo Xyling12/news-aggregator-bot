@@ -102,15 +102,17 @@ class MediaProcessor:
             logger.error(f"Watermark detection failed: {e}")
             return False, 0.0
 
-    async def search_stock_photo(self, keywords: List[str], count: int = 3) -> List[dict]:
+    async def search_stock_photo(self, keywords: List[str], count: int = 3,
+                                 orientation: str = "landscape") -> List[dict]:
         """Search for stock photos.
 
         Priority:
           1. Pexels — best quality, routed via NL VPS SOCKS5 proxy (PEXELS_PROXY env)
           2. Pixabay — free API, good variety
           3. Wikimedia Commons — free, no key, last resort
+        orientation: "landscape" (posts) or "portrait" (9:16 stories).
         """
-        results = await self._search_pexels(keywords, count)
+        results = await self._search_pexels(keywords, count, orientation=orientation)
         if not results:
             results = await self._search_pixabay(keywords, count)
         if not results:
@@ -344,7 +346,8 @@ class MediaProcessor:
 
         return results
 
-    async def _search_pexels(self, keywords: List[str], count: int) -> List[dict]:
+    async def _search_pexels(self, keywords: List[str], count: int,
+                             orientation: str = "landscape") -> List[dict]:
         """Search Pexels for photos. Requires PEXELS_API_KEY.
 
         Free API — 200 requests/hour. Register at https://www.pexels.com/api/
@@ -372,7 +375,7 @@ class MediaProcessor:
                 params = {
                     "query": query,
                     "per_page": count + 5,
-                    "orientation": "landscape",
+                    "orientation": orientation,
                     "locale": "ru-RU",
                 }
                 proxies = {"http": proxy_url, "https": proxy_url} if (with_proxy and proxy_url) else None
