@@ -1344,6 +1344,7 @@ _NEWS_CATEGORIES = [
 ]
 _DEFAULT_CATEGORY = ("Новости", (45, 55, 75), "card")
 _CIVIC_CATEGORIES = {"Транспорт", "ЖКХ", "Экономика", "Власть"}
+_POLLS_PER_DAY = 2  # at most N polls/day so they aren't under every post
 
 
 def _detect_news_category(text: str):
@@ -1558,13 +1559,17 @@ async def _publish_post(post: dict) -> bool:
                     engagement = await _rewriter.generate_engagement(eng_source)
                     eng_comment = engagement.get("comment")
                     poll = engagement.get("poll")
-                    # Polls only on civic topics (transport/ЖКХ/economy/власть) — where
-                    # readers actually have an opinion; not on every post.
+                    # Polls only on civic topics AND capped per day — civic categories
+                    # cover most news, so without a cap polls end up under every post.
                     cat_label, _c, _m = _detect_news_category(eng_source)
                     if poll and poll.get("options") and cat_label in _CIVIC_CATEGORIES:
-                        poll_attachment = await _vk_publisher.create_poll(
-                            poll["question"], poll["options"]
-                        )
+                        _pday = dt.now(timezone(timedelta(hours=4))).strftime("%Y-%m-%d")
+                        if await _db.get_daily_counter("pollcount", _pday) < _POLLS_PER_DAY:
+                            poll_attachment = await _vk_publisher.create_poll(
+                                poll["question"], poll["options"]
+                            )
+                            if poll_attachment:
+                                await _db.bump_daily_counter("pollcount", _pday)
                 except Exception as eng_err:
                     logger.warning(f"Post #{post['id']}: engagement gen failed ({eng_err})")
 

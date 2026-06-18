@@ -418,8 +418,9 @@ class ChannelMonitor:
         return None
 
     # Minimum acceptable resolution for a source photo (long side, px).
-    # Telegram preview thumbnails are ~90px — those must never be published.
-    _MIN_PHOTO_PX = 400
+    # Junk preview thumbnails are ~90px; real t.me previews are 250-400px and are
+    # fine to publish. Keep the bar low so we don't drop good photos → ugly cards.
+    _MIN_PHOTO_PX = 200
 
     @classmethod
     def _is_image_too_small(cls, path: str) -> bool:
