@@ -2252,7 +2252,9 @@ async def youtube_clips_loop():
                 if not clip:
                     logger.info("YT clips: no fresh suitable short found this slot")
                     continue
-                caption = f"{clip['title']}\n\nВидео: YouTube · {clip['channel']}"
+                _ch = clip.get("channel") or ""
+                _credit = f"Видео: YouTube · {_ch}" if _ch else "Видео: YouTube"
+                caption = f"{clip['title']}\n\n{_credit}"
                 link = f"https://vk.com/public{_config.vk_group_id}" if _config.vk_group_id else ""
                 vid_id = await _vk_publisher.upload_clip(clip["path"], caption=caption[:300], link_url=link)
                 if vid_id:

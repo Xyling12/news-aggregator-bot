@@ -28,10 +28,12 @@ SENSITIVE_WORDS = [
 class YouTubeClips:
     """Finds and downloads one fresh vertical short from approved channels."""
 
-    def __init__(self, channels: list, seen_path: str, max_seen: int = 800):
+    def __init__(self, channels: list, seen_path: str, max_seen: int = 800,
+                 max_age_days: int = 75):
         self.channels = list(channels or [])
         self.seen_path = seen_path
         self.max_seen = max_seen
+        self.max_age_days = max_age_days  # skip clips older than this (avoids off-season)
         self._seen = self._load_seen()
 
     # ── seen-set persistence (survives restarts / redeploys via data volume) ──
@@ -112,23 +114,36 @@ class YouTubeClips:
             return None
         random.shuffle(candidates)
 
-        # 2) Validate (vertical + short) and download the first that fits
-        for vid, title, channel in candidates[:10]:
+        # 2) Validate (vertical + short + RECENT) and download the first that fits
+        from datetime import datetime, timedelta
+        for vid, title, channel in candidates[:12]:
             self._seen.add(vid)  # mark seen so we don't re-evaluate next time
             meta_code, meta = await self._run(
-                ["--no-warnings", "--print", "%(duration)s|%(width)s|%(height)s",
+                ["--no-warnings", "--print",
+                 "%(duration)s|%(width)s|%(height)s|%(upload_date)s|%(channel)s",
                  "--simulate", f"https://www.youtube.com/watch?v={vid}"],
                 timeout=60,
             )
             if meta_code != 0 or not meta.strip():
                 continue
             try:
-                dur_s, w_s, h_s = meta.strip().splitlines()[0].split("|")
-                dur, w, h = float(dur_s), int(w_s), int(h_s)
+                parts = meta.strip().splitlines()[0].split("|")
+                dur, w, h = float(parts[0]), int(parts[1]), int(parts[2])
+                upload_date = parts[3] if len(parts) > 3 else ""
+                ch_name = parts[4].strip() if len(parts) > 4 else channel
             except Exception:
                 continue
             if dur < 4 or dur > 95 or h <= w:   # short + vertical only
                 continue
+            # Recency: skip stale clips (e.g. a winter video posted in summer)
+            if upload_date.isdigit() and len(upload_date) == 8:
+                try:
+                    age_days = (datetime.now() - datetime.strptime(upload_date, "%Y%m%d")).days
+                    if age_days > self.max_age_days:
+                        logger.debug(f"YT clips: skip {vid} — {age_days}d old (stale season)")
+                        continue
+                except Exception:
+                    pass
 
             out_path = os.path.join(tmp_dir, f"yt_{vid}.mp4")
             dl_code, _ = await self._run(
@@ -139,8 +154,9 @@ class YouTubeClips:
             )
             if dl_code == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 50_000:
                 self._save_seen()
-                logger.info(f"YT clips: downloaded {vid} ({dur:.0f}s, {w}x{h}) from {channel}")
-                return {"path": out_path, "title": title, "channel": channel, "id": vid}
+                clean_ch = ch_name if ch_name and ch_name not in ("NA", "None") else ""
+                logger.info(f"YT clips: downloaded {vid} ({dur:.0f}s, {w}x{h}) from {clean_ch or '?'}")
+                return {"path": out_path, "title": title, "channel": clean_ch, "id": vid}
 
         self._save_seen()
         return None
