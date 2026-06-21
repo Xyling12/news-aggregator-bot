@@ -29,7 +29,15 @@ def _clean_title(text: str) -> str:
     first = re.sub(r"#\S+", "", first)
     first = _EMOJI.sub("", first)
     first = re.sub(r"\s+", " ", first).strip(" -—:·")
-    return first[:140]
+    LIMIT = 120
+    if len(first) <= LIMIT:
+        return first
+    # Prefer ending on the first full sentence; otherwise cut on a word boundary.
+    cut = first[:LIMIT]
+    m = re.search(r"^(.{40,}?[.!?])\s", cut)
+    if m:
+        return m.group(1).strip()
+    return cut.rsplit(" ", 1)[0].rstrip(" ,.;:—-") + "…"
 
 
 def _wrap(draw, text, font, max_w):
