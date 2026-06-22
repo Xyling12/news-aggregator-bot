@@ -1592,6 +1592,31 @@ async def _publish_post(post: dict) -> bool:
                     await _vk_publisher.like_post(vk_post_id)
                 except Exception:
                     pass
+
+                # Repost the source VIDEO to VK Clips — fresh, local, current content
+                # (skip accidents/tragedies; cap a few per day).
+                if is_video_file and media_path:
+                    try:
+                        _vt = re.sub(r'<[^>]+>', '', text).lower()
+                        _vcat, _, _ = _detect_news_category(_vt)
+                        _sensitive = _vcat == "Происшествия" or any(
+                            w in _vt for w in (
+                                "погиб", "авари", "дтп", "пожар", "труп", "жертв",
+                                "стрель", "взрыв", "убий", "ножев", "суицид", "трагед", "смерт",
+                            )
+                        )
+                        _cday = dt.now(timezone(timedelta(hours=4))).strftime("%Y-%m-%d")
+                        if not _sensitive and await _db.get_daily_counter("srcclips", _cday) < 3:
+                            _ccap = re.sub(r'<[^>]+>', '', text).strip().split("\n")[0][:200]
+                            _clip_id = await _vk_publisher.upload_clip(
+                                media_path, caption=_ccap,
+                                link_url=f"https://vk.com/wall-{_vk_publisher.group_id}_{vk_post_id}",
+                            )
+                            if _clip_id:
+                                await _db.bump_daily_counter("srcclips", _cday)
+                                logger.info(f"Post #{post['id']}: source video → VK Clips ✅")
+                    except Exception as _ce:
+                        logger.warning(f"Post #{post['id']}: source-video clip failed ({_ce})")
                 # Seed a first comment from the community to spark discussion
                 if eng_comment:
                     try:
