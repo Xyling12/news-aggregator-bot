@@ -1356,6 +1356,13 @@ def _detect_news_category(text: str):
     return _DEFAULT_CATEGORY
 
 
+def _is_air_raid(text: str) -> bool:
+    """True if the text is about an air-raid/danger subject (rocket/sky/drone/siren).
+    Used to force instant publishing — these can't wait in the queue."""
+    t = (text or "").lower()
+    return any(any(w in t for w in kws) for kws in _ALERT_SUBJECTS.values())
+
+
 def _pick_alert_image(text: str) -> Optional[str]:
     """Return a local official-style template path for an emergency post, or None.
 
@@ -1871,6 +1878,12 @@ async def process_new_post(post_id: int):
         has_geo=has_geo,
         breaking_keywords=_config.breaking_keywords,
     )
+    # Air-raid / БПЛА / опасное небо / отбой — ALWAYS instant (skip queue + geo check).
+    # Reuses the alert-subject stems so падежи ("ракетной опасности") and "опасное небо"
+    # are caught regardless of breaking_keywords case.
+    if _is_air_raid(original_text):
+        is_breaking = True
+        logger.info(f"Post #{post_id}: air-raid/alert → instant publish")
 
     # Step 1: AI Rewrite + hashtags + photo keywords (all in ONE Gemini call to save quota)
     await _db.update_post_status(post_id, "rewriting")
