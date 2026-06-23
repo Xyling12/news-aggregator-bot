@@ -1584,6 +1584,9 @@ async def _publish_post(post: dict) -> bool:
             combined_attachment = ",".join(
                 a for a in (video_attachment, poll_attachment) if a
             ) or None
+            # Album posts: send the extra source photos to VK too (only when the
+            # primary is the source photo — not a stock/card/video).
+            vk_extra_photos = extra_paths if (photo_for_vk_path == media_path and not video_attachment) else None
             vk_post_id = await _vk_publisher.publish(
                 text,
                 photo_url=photo_for_vk_url,
@@ -1591,6 +1594,7 @@ async def _publish_post(post: dict) -> bool:
                 seo_enabled=_config.vk_seo_enabled,
                 seo_max_tags=_config.vk_seo_max_tags,
                 extra_attachment=combined_attachment,
+                extra_photo_paths=vk_extra_photos,
             )
             if vk_post_id:
                 logger.info(f"Post #{post['id']} cross-posted to VK (vk_post_id={vk_post_id})")

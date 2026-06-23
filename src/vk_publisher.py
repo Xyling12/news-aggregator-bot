@@ -467,6 +467,7 @@ class VKPublisher:
         seo_enabled: bool = True,
         seo_max_tags: int = 9,
         extra_attachment: Optional[str] = None,
+        extra_photo_paths: Optional[list] = None,
     ) -> Optional[int]:
         """
         Publish a post to the VK community wall.
@@ -507,10 +508,19 @@ class VKPublisher:
                     "VK photo upload failed — post will be published without image. "
                     "Check photos scope on VK_USER_TOKEN and app block status."
                 )
+        # Album posts: attach the extra photos too (VK supports up to 10)
+        for _ep in (extra_photo_paths or [])[:9]:
+            try:
+                if os.path.exists(_ep):
+                    a = await self._upload_photo("", photo_path=_ep)
+                    if a:
+                        attachments.append(a)
+            except Exception as _epe:
+                logger.debug(f"VK extra album photo failed: {_epe}")
         if extra_attachment:
             attachments.append(extra_attachment)
         if attachments:
-            params["attachments"] = ",".join(attachments)
+            params["attachments"] = ",".join(attachments[:10])
 
         result = await self._api_call("wall.post", **params)
 
