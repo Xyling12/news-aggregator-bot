@@ -34,7 +34,9 @@ TZ_IZHEVSK = timezone(timedelta(hours=4))
 DEFAULT_SCHEDULE = [
     (7,  0,  "weather",       "🌤 Погода"),
     (8,  0,  "holiday",       "🎉 Праздник"),
+    (13, 0,  "cat_clip",      "🐾 Котики (VK Клип)"),
     (17, 0,  "place",         "📍 Места Удмуртии"),
+    (19, 0,  "cat_clip",      "🐾 Котики (VK Клип)"),
     (20, 0,  "cat_story",     "🐾 Котики (VK Story)"),
     (21, 0,  "daily_digest",  "📊 Итоги дня"),
 ]
