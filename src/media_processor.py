@@ -729,15 +729,19 @@ class MediaProcessor:
         import random
         import tempfile
         import re
-        
+
         exclude = set(exclude_urls or [])
         channel_name = random.choice(channel_names)
         base_url = f"https://t.me/s/{channel_name}"
-        logger.info(f"MediaProcessor: fetching from Telegram web: {base_url}")
-        
+        # t.me is slow/blocked from the RU server — route through TELEGRAM_PROXY (same
+        # as the rest of the bot). Without it the request just times out.
+        _proxy = os.getenv("TELEGRAM_PROXY", "").strip() or None
+        _ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        logger.info(f"MediaProcessor: fetching from Telegram web: {base_url} (proxy={'yes' if _proxy else 'no'})")
+
         try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(base_url, timeout=15) as resp:
+            async with aiohttp.ClientSession(headers=_ua) as sess:
+                async with sess.get(base_url, timeout=aiohttp.ClientTimeout(total=30), proxy=_proxy) as resp:
                     if resp.status != 200:
                         logger.error(f"TG fetch failed: HTTP {resp.status}")
                         return None, None
@@ -761,8 +765,8 @@ class MediaProcessor:
             out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             out.close()
             
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(target_url, timeout=120) as resp:
+            async with aiohttp.ClientSession(headers=_ua) as sess:
+                async with sess.get(target_url, timeout=aiohttp.ClientTimeout(total=120), proxy=_proxy) as resp:
                     if resp.status != 200:
                         logger.error(f"TG download failed: HTTP {resp.status}")
                         return None, None
