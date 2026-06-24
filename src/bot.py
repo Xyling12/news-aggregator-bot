@@ -1349,7 +1349,9 @@ _POLLS_PER_DAY = 2  # at most N polls/day so they aren't under every post
 
 def _detect_news_category(text: str):
     """Return (label, card_color, mode) for a news text."""
-    t = (text or "").lower()
+    # Strip hashtags first — an AI tag like #спорт must NOT decide the category
+    # (a moon post tagged #спорт was mislabelled "СПОРТ").
+    t = re.sub(r"#\S+", " ", (text or "").lower())
     for triggers, cat in _NEWS_CATEGORIES:
         if any(k in t for k in triggers):
             return cat
@@ -1757,17 +1759,38 @@ async def process_new_post(post_id: int):
         "наш партнёр", "наш партнер", "партнёр проекта", "партнер проекта",
         "подслушала разговор", "подслушал разговор", "по секрету расскажу",
         "спа maitai", "спа майтай", "тайский спа",
+        # Нативка «я случайно узнала/стала свидетелем» + антиреклама магазина
+        "стала свидетелем", "стал свидетелем", "свидетелем обсуждения",
+        "обманывают покупателей", "наклеивают жёлтые ценники", "наклеивают желтые ценники",
+        "золотое яблоко", "предпочитает заказывать", "заказывать в другом месте",
+        # Job/«подработка на дому» скам
+        "ищем сотрудников", "ищу сотрудников", "требуются сотрудники",
+        "подработка на дому", "подработку на дому", "работа на дому",
+        "пишите менеджеру", "напишите менеджеру", "пиши менеджеру",
+        "ежедневная оплата", "ежедневную оплату", "минимальная занятость",
+        "оплата от 2000", "работа полностью удалённ", "работа полностью удаленн",
+        "нет опыта — это предложение", "от 18 лет и у вас нет опыта",
     ]
     if any(w in text_lower for w in _HARD_AD_WORDS):
         await _db.update_post_status(post_id, "rejected")
         logger.info(f"Post #{post_id} rejected: hard ad keyword matched")
         return
 
-    # Tier 1b: income-promise regex — ловит «от 70 до 250 тысяч рублей», «100 000 ₽/мес» и т.п.
-    if re.search(r"от\s*\d[\d\s]{1,7}\s*(?:до\s*\d[\d\s]{1,7}\s*)?(?:тыс|000)", text_lower) and \
-       any(w in text_lower for w in ("заработ", "доход", "рублей в месяц", "в месяц", "ежемесячно")):
+    # Tier 1b: income-promise regex — «от 70 до 250 тысяч рублей», «от 2000 до 5000 рублей»,
+    # «2000-5000 ₽», «100 000 ₽/мес» и т.п. (с тыс. ИЛИ просто рубли + контекст работы/дохода)
+    _money = re.search(
+        r"от\s*\d[\d\s]{1,7}\s*(?:до\s*\d[\d\s]{1,7}\s*)?(?:тыс|000|руб|₽)"
+        r"|\d[\d\s]{2,7}\s*[-–—]\s*\d[\d\s]{2,7}\s*(?:руб|₽|тыс)",
+        text_lower,
+    )
+    if _money and any(
+        w in text_lower for w in (
+            "заработ", "доход", "рублей в месяц", "в месяц", "ежемесячно",
+            "оплата", "оплату", "подработк", "вакансия", "сотрудник", "занятость",
+        )
+    ):
         await _db.update_post_status(post_id, "rejected")
-        logger.info(f"Post #{post_id} rejected: income-promise ad pattern")
+        logger.info(f"Post #{post_id} rejected: income/job-ad pattern")
         return
 
     # Tier 2: soft stop — 2+ generic ad words
