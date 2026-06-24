@@ -1309,40 +1309,42 @@ _ALERT_FILES = {
 _ALERT_CANCEL = ("отмен", "отбой", "сняли", "снят", "миновал", "завершён", "завершен")
 
 
-# News category → (label, card colour, "stock"|"card").
-# "stock" = real photo is safe (no Izhevsk-specific framing); "card" = branded card
-# (stock would return a random foreign city, which we never want for local news).
+# News category → (label, card colour, mode, fixed_stock_keywords).
+# mode "stock" = use a real photo. To avoid foreign cityscapes we pass our OWN
+# neutral close-up keywords (objects/interiors), NOT the AI's "city" keywords.
+# mode "card" = branded card (kept only where any photo would look like a city —
+# власть/officials and the generic default).
 _NEWS_CATEGORIES = [
     (("дтп", "авар", "пожар", "полиц", "суд ", "суда", "осуд", "кража", "мошен",
       "задержа", "арест", "происш", "погиб", "пострад", "ножев", "взлом", "наезд"),
-     ("Происшествия", (176, 42, 46), "card")),
+     ("Происшествия", (176, 42, 46), "stock", ["police car emergency lights", "fire truck rescue"])),
     (("трамва", "троллейбус", "автобус", "маршрут", "дорог", "транспорт", "пробк",
       "остановк", "перекрыт", "тротуар"),
-     ("Транспорт", (33, 79, 140), "card")),
+     ("Транспорт", (33, 79, 140), "stock", ["tram close up", "city bus interior"])),
     (("мэр", "глава города", "депутат", "госсовет", "администрац", "бюджет",
       "губернат", "власт", "чиновник", "министр", "госдум", "выбор"),
-     ("Власть", (40, 54, 85), "card")),
+     ("Власть", (40, 54, 85), "card", None)),
     (("жкх", "отоплен", "коммунал", "водоснаб", "тариф", "электроснаб", "газоснаб",
       "капремонт", "управляющ"),
-     ("ЖКХ", (20, 110, 110), "card")),
+     ("ЖКХ", (20, 110, 110), "stock", ["heating radiator close up", "water pipes utility"])),
     (("цена", "подорожал", "зарплат", "налог", "бизнес", "эконом", "инфляц",
       "кредит", "ипотек", "пенси", "пособи"),
-     ("Экономика", (150, 90, 30), "card")),
+     ("Экономика", (150, 90, 30), "stock", ["ruble banknotes money", "calculator finance documents"])),
     (("школ", "детсад", "вуз", "универ", "образован", "ученик", "студент", "егэ"),
-     ("Образование", (70, 90, 150), "card")),
+     ("Образование", (70, 90, 150), "stock", ["empty classroom desks", "books library"])),
     (("больниц", "поликлин", "врач", "медиц", "здоров", "вакцин", "госпитал"),
-     ("Здоровье", (28, 120, 92), "card")),
+     ("Здоровье", (28, 120, 92), "stock", ["hospital corridor", "stethoscope medical"])),
     (("театр", "концерт", "выставк", "фестивал", "культур", "музей", "кино", "премьер"),
-     ("Культура", (120, 50, 130), "card")),
+     ("Культура", (120, 50, 130), "stock", ["theater stage curtain", "concert stage lights"])),
     (("спорт", "матч", "турнир", "чемпион", "соревнов", "стадион"),
-     ("Спорт", (35, 100, 60), "card")),
-    # photo-friendly — real stock is fine and not tied to a recognizable city
+     ("Спорт", (35, 100, 60), "stock", ["stadium sport field", "running track"])),
+    # photo-friendly — AI/weather keywords are fine (sky/nature, never a city)
     (("погод", "температур", "прогноз", "осадк", "дожд", "снег", "мороз", "гроза", "ветер"),
-     ("Погода", None, "stock")),
+     ("Погода", None, "stock", None)),
     (("природ", "лес", "река", "парк", "животн", "птиц", "рыбал", "озер", "сад", "урожай"),
-     ("Природа", None, "stock")),
+     ("Природа", None, "stock", None)),
 ]
-_DEFAULT_CATEGORY = ("Новости", (45, 55, 75), "card")
+_DEFAULT_CATEGORY = ("Новости", (45, 55, 75), "card", None)
 _CIVIC_CATEGORIES = {"Транспорт", "ЖКХ", "Экономика", "Власть"}
 _POLLS_PER_DAY = 2  # at most N polls/day so they aren't under every post
 
@@ -1571,7 +1573,7 @@ async def _publish_post(post: dict) -> bool:
                     poll = engagement.get("poll")
                     # Polls only on civic topics AND capped per day — civic categories
                     # cover most news, so without a cap polls end up under every post.
-                    cat_label, _c, _m = _detect_news_category(eng_source)
+                    cat_label = _detect_news_category(eng_source)[0]
                     if poll and poll.get("options") and cat_label in _CIVIC_CATEGORIES:
                         _pday = dt.now(timezone(timedelta(hours=4))).strftime("%Y-%m-%d")
                         if await _db.get_daily_counter("pollcount", _pday) < _POLLS_PER_DAY:
@@ -1611,7 +1613,7 @@ async def _publish_post(post: dict) -> bool:
                 if is_video_file and media_path:
                     try:
                         _vt = re.sub(r'<[^>]+>', '', text).lower()
-                        _vcat, _, _ = _detect_news_category(_vt)
+                        _vcat = _detect_news_category(_vt)[0]
                         _sensitive = _vcat == "Происшествия" or any(
                             w in _vt for w in (
                                 "погиб", "авари", "дтп", "пожар", "труп", "жертв",
@@ -2008,12 +2010,14 @@ async def process_new_post(post_id: int):
                 #   • photo-friendly topics (weather/nature) → real stock photo
                 #   • everything local (city/court/власть/ДТП…) → branded headline card,
                 #     because stock has no Izhevsk and returns random foreign cities.
-                cat_label, cat_color, cat_mode = _detect_news_category(
+                cat_label, cat_color, cat_mode, cat_kw = _detect_news_category(
                     original_text + " " + (rewritten or "")
                 )
                 if cat_mode == "stock":
-                    keywords = _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
-                    if keywords and len(keywords) >= 2:
+                    # Use the category's fixed neutral keywords (close-up objects, no
+                    # cityscape) when defined; otherwise fall back to AI keywords.
+                    keywords = cat_kw or _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
+                    if keywords and len(keywords) >= 1:
                         stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
                         if stock_photos:
                             async with _used_stock_urls_lock:
