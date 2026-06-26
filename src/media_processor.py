@@ -749,14 +749,18 @@ class MediaProcessor:
 
             # Find all video tags
             matches = re.findall(r'<video[^>]+src="([^"]+\.mp4[^"]*)"', html, flags=re.IGNORECASE)
-            
-            # Filter out already seen urls
-            fresh_matches = [m for m in matches if m not in exclude]
-            
+
+            # Dedup by the STABLE part of the URL — t.me serves the same video with a
+            # rotating ?token=, so the full URL changes every fetch (caused dup clips).
+            def _key(u: str) -> str:
+                return u.split("?", 1)[0]
+            exclude_keys = {_key(e) for e in exclude}
+            fresh_matches = [m for m in matches if _key(m) not in exclude_keys]
+
             if not fresh_matches:
                 logger.warning(f"No unseen MP4 videos found in {channel_name} (found {len(matches)} total)")
                 return None, None
-            
+
             recent_vids = fresh_matches[-10:] if len(fresh_matches) > 10 else fresh_matches
             target_url = random.choice(recent_vids)
             
@@ -775,7 +779,8 @@ class MediaProcessor:
                             f.write(chunk)
             
             logger.info(f"TG clip ready -> {out.name}")
-            return out.name, target_url
+            # Return the token-stripped key so callers dedup the same video correctly
+            return out.name, _key(target_url)
 
         except Exception as e:
             logger.error(f"TG fetch error: {e}")
