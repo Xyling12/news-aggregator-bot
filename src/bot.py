@@ -1795,6 +1795,22 @@ async def process_new_post(post_id: int):
         logger.info(f"Post #{post_id} rejected: income/job-ad pattern")
         return
 
+    # Taboo topics — never publish (suicide / self-harm, esp. children). Editorial rule.
+    _TABOO = [
+        "выпал из окна", "выпала из окна", "выпал с окна", "выпала с окна",
+        "выбросился", "выбросилась", "выбросился из окна", "выбросилась из окна",
+        "покончил с собой", "покончила с собой", "покончил жизнь", "покончила жизнь",
+        "свёл счёты с жизнью", "свела счёты с жизнью", "свел счеты с жизнью",
+        "наложил на себя руки", "наложила на себя руки",
+        "самоубий", "суицид", "повесил", "повесилась", "вскрыл вены", "вскрыла вены",
+        "спрыгнул с", "спрыгнула с", "прыгнул с крыши", "прыгнула с крыши",
+        "шагнул из окна", "шагнула из окна", "свёл счёты", "свела счёты",
+    ]
+    if any(w in text_lower for w in _TABOO):
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(f"Post #{post_id} rejected: taboo topic (suicide/self-harm)")
+        return
+
     # Tier 2: soft stop — 2+ generic ad words
     ad_matches = [w for w in _config.ad_stop_words if w in text_lower]
     if len(ad_matches) >= 2:  # 2+ ad stop-words = spam
