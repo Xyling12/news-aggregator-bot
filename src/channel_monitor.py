@@ -30,6 +30,8 @@ class ChannelMonitor:
         self._polling_task: Optional[asyncio.Task] = None
         self._running = False
         self._session: Optional[aiohttp.ClientSession] = None
+        # t.me is blocked/slow from the RU server → route scraping via TELEGRAM_PROXY
+        self._proxy = os.getenv("TELEGRAM_PROXY", "").strip() or None
 
     async def start(self):
         """Start the web scraping polling loop."""
@@ -106,7 +108,7 @@ class ChannelMonitor:
         url = f"https://t.me/s/{channel_username}"
 
         try:
-            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30), proxy=self._proxy) as resp:
                 if resp.status != 200:
                     logger.warning(f"HTTP {resp.status} for @{channel_username}")
                     return
@@ -347,7 +349,7 @@ class ChannelMonitor:
         max_bytes = max_mb * 1024 * 1024
         try:
             async with self._session.get(
-                url, timeout=aiohttp.ClientTimeout(total=120)
+                url, timeout=aiohttp.ClientTimeout(total=120), proxy=self._proxy
             ) as resp:
                 if resp.status != 200:
                     logger.warning(f"Video download HTTP {resp.status}: {url[:80]}")
@@ -397,7 +399,7 @@ class ChannelMonitor:
 
         for attempt in range(2):
             try:
-                async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30), proxy=self._proxy) as resp:
                     if resp.status == 200:
                         data = await resp.read()
                         if len(data) > 1000:  # Sanity check: skip tiny/empty responses
