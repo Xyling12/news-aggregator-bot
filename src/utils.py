@@ -189,6 +189,54 @@ def find_similar_candidate(
     return None
 
 
+# Region words appear in almost every post — useless as event markers
+_ENTITY_STOP_STEMS = {
+    "ижевс", "удмур", "росси", "регио", "росси", "ежедн", "сегод",
+    "вчера", "завтр", "жител", "город", "недел", "источ", "местн",
+}
+
+
+def extract_event_entities(text: str) -> set:
+    """Crude event fingerprint: stems of capitalized words (persons, orgs,
+    places) + standalone numbers. Capitalized words are taken from anywhere
+    except the very start of a sentence to cut down on false positives."""
+    entities = set()
+    # words in Caps not right after sentence boundary
+    for m in re.finditer(r'(?<![.!?\n"«])\s([А-ЯЁ][а-яё]{3,})', text):
+        stem = m.group(1).lower()[:6]
+        if stem not in _ENTITY_STOP_STEMS:
+            entities.add(stem)
+    # significant numbers (sums, percentages, counts) — 2+ digits
+    entities.update(re.findall(r'\b\d[\d.,]{1,}\b', text))
+    return entities
+
+
+def is_same_event(text1: str, text2: str, min_shared: int = 3) -> bool:
+    """True when two posts likely cover the same event: they share several
+    named entities/numbers. Complements text-similarity dedup, which misses
+    rewrites of the same story published days apart."""
+    e1 = extract_event_entities(text1)
+    e2 = extract_event_entities(text2)
+    if not e1 or not e2:
+        return False
+    shared = e1 & e2
+    if len(shared) >= min_shared:
+        return True
+    # 2 shared entities is enough when they make up most of the smaller set
+    smaller = min(len(e1), len(e2))
+    return len(shared) >= 2 and smaller <= 4 and len(shared) / smaller >= 0.5
+
+
+def find_same_event_candidate(text: str, candidates: list):
+    """Return the first candidate that covers the same event, else None."""
+    for existing in candidates:
+        if not existing or existing == text:
+            continue
+        if is_same_event(text, existing):
+            return existing
+    return None
+
+
 def is_similar_to_any(text: str, candidates: list, rewriter) -> bool:
     """Return True if *text* is too similar to any text in *candidates*.
 

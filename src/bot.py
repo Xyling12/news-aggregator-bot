@@ -40,6 +40,8 @@ from src.utils import (
     word_overlap,
     is_similar_to_any,
     find_similar_candidate,
+    find_same_event_candidate,
+    extract_event_entities,
     detect_rubric,
     format_post,
     RUBRIC_MAP,
@@ -1348,6 +1350,12 @@ _NEWS_CATEGORIES = [
 _DEFAULT_CATEGORY = ("Новости", (45, 55, 75), "card", None)
 _CIVIC_CATEGORIES = {"Транспорт", "ЖКХ", "Экономика", "Власть"}
 _POLLS_PER_DAY = 2  # at most N polls/day so they aren't under every post
+_SELF_COMMENTS_PER_DAY = 4  # at most N seeded first-comments/day — under every post it reads as a bot
+# Never seed a discussion comment under tragedies/casualties
+_TRAGEDY_WORDS = (
+    "погиб", "умер", "сконча", "жертв", "труп", "смерт", "трагед",
+    "убий", "суицид", "выпал из окна", "утону", "сбил", "насмерть",
+)
 
 
 def _detect_news_category(text: str):
@@ -1572,6 +1580,15 @@ async def _publish_post(post: dict) -> bool:
                     engagement = await _rewriter.generate_engagement(eng_source)
                     eng_comment = engagement.get("comment")
                     poll = engagement.get("poll")
+                    _els = eng_source.lower()
+                    if eng_comment and any(w in _els for w in _TRAGEDY_WORDS):
+                        eng_comment = None  # no discussion prompts under tragedies
+                    if eng_comment:
+                        _cmday = dt.now(timezone(timedelta(hours=4))).strftime("%Y-%m-%d")
+                        if await _db.get_daily_counter("selfcomment", _cmday) >= _SELF_COMMENTS_PER_DAY:
+                            eng_comment = None
+                        else:
+                            await _db.bump_daily_counter("selfcomment", _cmday)
                     # Polls only on civic topics AND capped per day — civic categories
                     # cover most news, so without a cap polls end up under every post.
                     cat_label = _detect_news_category(eng_source)[0]
@@ -1913,6 +1930,18 @@ async def process_new_post(post_id: int):
         logger.info(
             f"Post #{post_id} rejected: similar post already in queue "
             f"(similarity={queued_match['similarity']:.2f}, overlap={queued_match['overlap']:.2f})"
+        )
+        return
+
+    # Tier 3: Same-event check over 7 days — text similarity misses the same
+    # story rewritten differently days later (e.g. the same quote resurfacing).
+    week_texts = await _db.get_texts_by_status(["published"], hours=168)
+    same_event = find_same_event_candidate(original_text, week_texts)
+    if same_event:
+        await _db.update_post_status(post_id, "rejected")
+        logger.info(
+            f"Post #{post_id} rejected: same event already covered this week "
+            f"(entities match: {sorted(extract_event_entities(original_text) & extract_event_entities(same_event))[:6]})"
         )
         return
 
