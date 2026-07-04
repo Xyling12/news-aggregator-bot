@@ -1316,8 +1316,9 @@ _ALERT_CANCEL = ("отмен", "отбой", "сняли", "снят", "мино
 # власть/officials and the generic default).
 _NEWS_CATEGORIES = [
     (("дтп", "авар", "пожар", "полиц", "суд ", "суда", "осуд", "кража", "мошен",
-      "задержа", "арест", "происш", "погиб", "пострад", "ножев", "взлом", "наезд"),
-     ("Происшествия", (176, 42, 46), "stock", ["police car emergency lights", "fire truck rescue"])),
+      "задержа", "арест", "происш", "погиб", "пострад", "ножев", "взлом", "наезд",
+      "сбит", "ракет", "атаков", "противник"),
+     ("Происшествия", (176, 42, 46), "card", None)),
     (("трамва", "троллейбус", "автобус", "маршрут", "дорог", "транспорт", "пробк",
       "остановк", "перекрыт", "тротуар"),
      ("Транспорт", (33, 79, 140), "stock", ["tram close up", "city bus interior"])),
@@ -2034,8 +2035,11 @@ async def process_new_post(post_id: int):
                     # cityscape) when defined; otherwise fall back to AI keywords.
                     keywords = cat_kw or _ai_photo_keywords or _rewriter._extract_keywords_fallback(original_text)
                     if keywords and len(keywords) >= 1:
-                        stock_photos = await _media_processor.search_stock_photo(keywords, count=3)
+                        stock_photos = await _media_processor.search_stock_photo(keywords, count=12)
                         if stock_photos:
+                            # Shuffle so we don't always publish the same top result
+                            # (the fixed keywords otherwise returned one identical photo).
+                            random.shuffle(stock_photos)
                             async with _used_stock_urls_lock:
                                 chosen = None
                                 for candidate in stock_photos:

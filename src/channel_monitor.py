@@ -426,12 +426,20 @@ class ChannelMonitor:
 
     @classmethod
     def _is_image_too_small(cls, path: str) -> bool:
-        """Return True if the downloaded image is a tiny thumbnail (e.g. 90x67)."""
+        """Return True if the downloaded image is a tiny thumbnail (e.g. 90x67) or
+        an almost fully black/corrupt frame (a "чёрный квадрат")."""
         try:
-            from PIL import Image
+            from PIL import Image, ImageStat
             with Image.open(path) as img:
                 w, h = img.size
-            return max(w, h) < cls._MIN_PHOTO_PX
+                if max(w, h) < cls._MIN_PHOTO_PX:
+                    return True
+                # Near-black / blank frame → drop (use a card instead)
+                stat = ImageStat.Stat(img.convert("L"))
+                if stat.mean[0] < 18:  # 0=black, 255=white
+                    logger.info(f"Image {path} is near-black (mean={stat.mean[0]:.0f}) — dropping")
+                    return True
+            return False
         except Exception as e:
             logger.debug(f"Could not measure image {path}: {e}")
             return False  # On error, don't discard — better a photo than none
