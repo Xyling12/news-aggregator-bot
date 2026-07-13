@@ -595,7 +595,9 @@ class ContentScheduler:
                 else:
                     label = "Места Удмуртии"
                     _pt = _rc.sub(r'<[^>]+>', '', text).strip().splitlines()
-                    title = (_pt[0] if _pt else "Место в Удмуртии")[:90]
+                    # no hard slice here — card_maker._clean_title cuts on a
+                    # sentence/word boundary itself ("Тут м" bug)
+                    title = _pt[0] if _pt else "Место в Удмуртии"
                     color = (26, 92, 66)
                 card_path = os.path.join(self.config.media_dir, f"rubric_card_{rubric}.jpg")
                 os.makedirs(self.config.media_dir, exist_ok=True)
