@@ -479,5 +479,9 @@ class ChannelMonitor:
             "сегодня отмечается всемирный день", "сегодня отмечается международный день",
             "сегодня отмечаем всемирный день", "сегодня отмечаем международный день",
             "отмечается всемирный день", "отмечается международный день",
+            # generic «today we celebrate…» from sources duplicates our own
+            # HOLIDAYS-driven greeting post (e.g. two День семьи posts same day)
+            "сегодня отмечаем день", "сегодня отмечается день",
+            "сегодня мы отмечаем", "сегодня празднуем",
         ]
         return any(p in lower for p in phrases)

@@ -189,25 +189,42 @@ def find_similar_candidate(
     return None
 
 
-# Region words appear in almost every post — useless as event markers
-_ENTITY_STOP_STEMS = {
-    "ижевс", "удмур", "росси", "регио", "росси", "ежедн", "сегод",
+# Region words appear in almost every post — useless as event markers.
+# Compared via startswith() against 6-char stems.
+_ENTITY_STOP_STEMS = (
+    "ижевс", "удмур", "росси", "регио", "ежедн", "сегод",
     "вчера", "завтр", "жител", "город", "недел", "источ", "местн",
-}
+    "сообщ", "москв", "телегр", "интерн",
+)
+
+
+def _is_stop_stem(stem: str) -> bool:
+    return any(stem.startswith(s) for s in _ENTITY_STOP_STEMS)
 
 
 def extract_event_entities(text: str) -> set:
     """Crude event fingerprint: stems of capitalized words (persons, orgs,
-    places) + standalone numbers. Capitalized words are taken from anywhere
-    except the very start of a sentence to cut down on false positives."""
+    places, «quoted» names) + significant numbers. Capitalized words are taken
+    from anywhere except the very start of a sentence to cut false positives."""
     entities = set()
-    # words in Caps not right after sentence boundary
-    for m in re.finditer(r'(?<![.!?\n"«])\s([А-ЯЁ][а-яё]{3,})', text):
+    # words in Caps not right after sentence boundary, plus the very first
+    # word of the text (posts often open with the subject's name)
+    for m in re.finditer(r'(?:(?<![.!?\n"])\s|\A)([А-ЯЁ][а-яё]{3,})', text):
         stem = m.group(1).lower()[:6]
-        if stem not in _ENTITY_STOP_STEMS:
+        if not _is_stop_stem(stem):
             entities.add(stem)
-    # significant numbers (sums, percentages, counts) — 2+ digits
-    entities.update(re.findall(r'\b\d[\d.,]{1,}\b', text))
+    # «quoted» names anywhere: сигнал «Ковер», ТЦ «Три кита», ЖК «Ежевика»
+    for m in re.finditer(r'[«"]([А-ЯЁA-Z][^»"]{2,30})[»"]', text):
+        stem = m.group(1).lower()[:10].strip()
+        if not _is_stop_stem(stem):
+            entities.add(stem)
+    # significant numbers only: 3+ digits, or with a decimal/thousand separator.
+    # Two-digit numbers (dates, hours, ages) are too generic and caused
+    # false dedup hits like {'13', '20', 'ижевск'}.
+    for num in re.findall(r'\b\d[\d.,]{1,}\b', text):
+        digits = re.sub(r'\D', '', num)
+        if len(digits) >= 3 or ('.' in num or ',' in num):
+            entities.add(num)
     return entities
 
 
@@ -220,6 +237,9 @@ def is_same_event(text1: str, text2: str, min_shared: int = 3) -> bool:
     if not e1 or not e2:
         return False
     shared = e1 & e2
+    # numbers alone must never decide a match — require a named entity too
+    if not any(not ch.isdigit() for ent in shared for ch in ent[:1]):
+        return False
     if len(shared) >= min_shared:
         return True
     # 2 shared entities is enough when they make up most of the smaller set

@@ -1912,7 +1912,7 @@ async def process_new_post(post_id: int):
 
     # Step 0c: Deduplication — smart two-tier check
     # Tier 1: Compare against PUBLISHED posts (last 12h) — don't repeat what's already on the channel
-    published_texts = await _db.get_texts_by_status(["published"], hours=12)
+    published_texts = await _db.get_texts_by_status(["published"], hours=48)
     published_match = _find_similar_match(original_text, published_texts)
     if published_match:
         await _db.update_post_status(post_id, "rejected")
