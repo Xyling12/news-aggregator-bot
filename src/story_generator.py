@@ -157,6 +157,40 @@ class StoryGenerator:
 
         return img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
+    def _fit_story_photo(self, img: Image.Image, target_w: int = 1080, target_h: int = 1920) -> Image.Image:
+        """Prepare a photo for a 9:16 story WITHOUT cutting the subject.
+
+        Near-portrait photos are cover-cropped as before. Landscape/square
+        photos (cats, news shots) lose their subject when hard-cropped to
+        9:16 — for those, paste the full photo (contain) over a blurred,
+        darkened cover-crop of itself."""
+        from PIL import ImageFilter, ImageEnhance
+        img_ratio = img.width / img.height
+        target_ratio = target_w / target_h  # 0.5625
+        # close enough to 9:16 → normal cover crop loses almost nothing
+        if img_ratio <= target_ratio * 1.25:
+            return self._crop_and_resize(img, target_w, target_h)
+
+        # blurred backdrop from the same photo
+        bg = self._crop_and_resize(img, target_w, target_h)
+        bg = bg.filter(ImageFilter.GaussianBlur(38))
+        bg = ImageEnhance.Brightness(bg).enhance(0.55)
+
+        # foreground: full photo, fitted to width
+        fg_w = target_w
+        fg_h = int(fg_w / img_ratio)
+        max_fg_h = int(target_h * 0.62)  # keep bottom free for scrim/text
+        if fg_h > max_fg_h:
+            fg_h = max_fg_h
+            fg_w = int(fg_h * img_ratio)
+        fg = img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+        # place slightly above center so the headline zone stays clear
+        x = (target_w - fg_w) // 2
+        y = int(target_h * 0.42) - fg_h // 2
+        y = max(int(target_h * 0.10), y)
+        bg.paste(fg, (x, y))
+        return bg
+
     def _draw_rounded_rectangle(self, draw: ImageDraw.ImageDraw, xy, radius, fill):
         """Draw a rounded rectangle (for backgrounds)."""
         x1, y1, x2, y2 = xy
@@ -335,7 +369,7 @@ class StoryGenerator:
         headline = _strip_emoji(headline or "").strip()
 
         if photo is not None:
-            base = self._crop_and_resize(photo, W, H).convert("RGBA")
+            base = self._fit_story_photo(photo, W, H).convert("RGBA")
             scrim = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             sd = ImageDraw.Draw(scrim)
             b_start = int(H * 0.40)
