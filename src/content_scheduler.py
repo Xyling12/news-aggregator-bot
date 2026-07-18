@@ -559,6 +559,17 @@ class ContentScheduler:
         except ImportError:
             pass  # Safety: never block publication due to import errors
 
+        # Sensitive-content guard (suicide/self-harm safe-messaging rules) — the daily
+        # digest aggregates real published news via AI summarization, so it needs the
+        # same check the moderation pipeline applies to individual posts.
+        if rubric == "daily_digest":
+            from src.content_filter import filter_sensitive_content, FilterAction
+            _cf_result = filter_sensitive_content(text)
+            if _cf_result.action == FilterAction.BLOCK:
+                logger.warning(f"Skipping {rubric}: blocked by content_filter ({_cf_result.reason})")
+                raise RuntimeError(f"'{label}' заблокирован фильтром чувствительного контента.")
+            text = _cf_result.text
+
         # Convert any leftover Markdown to Telegram HTML (safety net — prompts forbid Markdown,
         # but AI sometimes ignores instructions)
         import re as _re
@@ -601,7 +612,7 @@ class ContentScheduler:
                     color = (26, 92, 66)
                 card_path = os.path.join(self.config.media_dir, f"rubric_card_{rubric}.jpg")
                 os.makedirs(self.config.media_dir, exist_ok=True)
-                make_news_card(title, label, color, card_path)
+                await asyncio.to_thread(make_news_card, title, label, color, card_path)
                 fallback_path = card_path
             except Exception as ce:
                 logger.warning(f"{rubric}: card generation failed: {ce}")

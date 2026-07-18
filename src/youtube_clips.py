@@ -91,14 +91,14 @@ class YouTubeClips:
         for ch in channels:
             code, out = await self._run(
                 ["--flat-playlist", "--no-warnings", "--playlist-end", "20",
-                 "--print", "%(id)s|%(title)s|%(channel)s", self._channel_url(ch)],
+                 "--print", "%(id)s\x1f%(title)s\x1f%(channel)s", self._channel_url(ch)],
                 timeout=90,
             )
             if code != 0:
                 logger.debug(f"YT clips: list failed for {ch}")
                 continue
             for line in out.splitlines():
-                parts = line.split("|", 2)
+                parts = line.split("\x1f", 2)
                 if len(parts) < 2:
                     continue
                 vid = parts[0].strip()
@@ -120,14 +120,14 @@ class YouTubeClips:
             self._seen.add(vid)  # mark seen so we don't re-evaluate next time
             meta_code, meta = await self._run(
                 ["--no-warnings", "--print",
-                 "%(duration)s|%(width)s|%(height)s|%(upload_date)s|%(channel)s",
+                 "%(duration)s\x1f%(width)s\x1f%(height)s\x1f%(upload_date)s\x1f%(channel)s",
                  "--simulate", f"https://www.youtube.com/watch?v={vid}"],
                 timeout=60,
             )
             if meta_code != 0 or not meta.strip():
                 continue
             try:
-                parts = meta.strip().splitlines()[0].split("|")
+                parts = meta.strip().splitlines()[0].split("\x1f")
                 dur, w, h = float(parts[0]), int(parts[1]), int(parts[2])
                 upload_date = parts[3] if len(parts) > 3 else ""
                 ch_name = parts[4].strip() if len(parts) > 4 else channel

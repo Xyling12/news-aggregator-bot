@@ -364,7 +364,7 @@ class VKPublisher:
 
         # Step 1: Get upload server URL (requires user token with 'photos' scope)
         photo_token = self.user_token or self.access_token
-        logger.info(f"VK photo upload: using token prefix {photo_token[:20]}...")
+        logger.info(f"VK photo upload: using {'user' if self.user_token else 'group'} token ({len(photo_token)} chars)")
         upload_server = await self._api_call(
             "photos.getWallUploadServer",
             group_id=int(self.group_id),

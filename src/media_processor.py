@@ -380,7 +380,8 @@ class MediaProcessor:
                 }
                 proxies = {"http": proxy_url, "https": proxy_url} if (with_proxy and proxy_url) else None
                 if proxies:
-                    logger.debug(f"Pexels: using proxy by requests {proxy_url[:30]}...")
+                    _proxy_host = proxy_url.split("@")[-1] if "@" in proxy_url else proxy_url
+                    logger.debug(f"Pexels: using proxy by requests ({_proxy_host})")
                 
                 return requests.get(url, headers=headers, params=params, proxies=proxies, timeout=15)
             
@@ -768,16 +769,22 @@ class MediaProcessor:
             
             out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
             out.close()
-            
-            async with aiohttp.ClientSession(headers=_ua) as sess:
-                async with sess.get(target_url, timeout=aiohttp.ClientTimeout(total=120), proxy=_proxy) as resp:
-                    if resp.status != 200:
-                        logger.error(f"TG download failed: HTTP {resp.status}")
-                        return None, None
-                    with open(out.name, "wb") as f:
-                        async for chunk in resp.content.iter_chunked(65536):
-                            f.write(chunk)
-            
+
+            try:
+                async with aiohttp.ClientSession(headers=_ua) as sess:
+                    async with sess.get(target_url, timeout=aiohttp.ClientTimeout(total=120), proxy=_proxy) as resp:
+                        if resp.status != 200:
+                            logger.error(f"TG download failed: HTTP {resp.status}")
+                            os.remove(out.name)
+                            return None, None
+                        with open(out.name, "wb") as f:
+                            async for chunk in resp.content.iter_chunked(65536):
+                                f.write(chunk)
+            except Exception:
+                if os.path.exists(out.name):
+                    os.remove(out.name)
+                raise
+
             logger.info(f"TG clip ready -> {out.name}")
             # Return the token-stripped key so callers dedup the same video correctly
             return out.name, _key(target_url)

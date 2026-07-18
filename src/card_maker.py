@@ -56,6 +56,15 @@ def _wrap(draw, text, font, max_w):
     return lines
 
 
+def _load_font(size: int) -> ImageFont.FreeTypeFont:
+    """Load the branded bold font, falling back to PIL's built-in font if the
+    TTF asset is missing (e.g. incomplete deploy) so card rendering never crashes."""
+    try:
+        return ImageFont.truetype(_FONT_BOLD, size)
+    except OSError:
+        return ImageFont.load_default(size=size)
+
+
 def make_news_card(title: str, category_label: str, bg_color, out_path: str) -> str:
     """Render a branded headline card to out_path and return the path."""
     img = Image.new("RGB", (W, H), tuple(bg_color))
@@ -63,7 +72,7 @@ def make_news_card(title: str, category_label: str, bg_color, out_path: str) -> 
     cx = W // 2
 
     # Category label (top-left, uppercase) with an underline accent
-    f_cat = ImageFont.truetype(_FONT_BOLD, 46)
+    f_cat = _load_font(46)
     label = (category_label or "Новости").upper()
     d.text((90, 72), label, font=f_cat, fill=(255, 255, 255))
     lw = d.textlength(label, font=f_cat)
@@ -72,7 +81,7 @@ def make_news_card(title: str, category_label: str, bg_color, out_path: str) -> 
     # Headline — centered, wrapped, size depends on length
     title = _clean_title(title) or "Новости Ижевска"
     size = 80 if len(title) < 70 else (66 if len(title) < 110 else 56)
-    f_title = ImageFont.truetype(_FONT_BOLD, size)
+    f_title = _load_font(size)
     lines = _wrap(d, title, f_title, W - 180)[:6]
     line_h = size + 18
     total_h = len(lines) * line_h
@@ -83,7 +92,7 @@ def make_news_card(title: str, category_label: str, bg_color, out_path: str) -> 
         y += line_h
 
     # Footer brand
-    f_foot = ImageFont.truetype(_FONT_BOLD, 40)
+    f_foot = _load_font(40)
     foot = "ИЖЕВСК СЕГОДНЯ"
     fw = d.textlength(foot, font=f_foot)
     d.text((cx - fw / 2, H - 96), foot, font=f_foot, fill=(255, 255, 255))

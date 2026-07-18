@@ -1,0 +1,47 @@
+# Git
+.git/
+.gitignore
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+venv/
+.venv/
+
+# Data / runtime (mounted as volumes in production)
+data/
+media/
+*.db
+*.db-journal
+
+# Tests
+tests/
+test_cat_story.py
+pytest.ini
+.github/
+
+# Docs / misc
+docs/
+README.md
+scripts/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Agent tooling (not needed at runtime)
+.agent/

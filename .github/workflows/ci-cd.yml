@@ -28,15 +28,12 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install opencv-python-headless numpy pytest pytest-asyncio pytest-cov pyyaml
+          pip install pytest pytest-asyncio pytest-cov pyyaml
 
       - name: Run tests
         run: |
           python -m pytest tests/ -v --tb=short -m "not slow" \
-            --cov=src --cov-report=term-missing --cov-report=xml \
-            --ignore=tests/test_advanced.py || true
-          python -m pytest tests/test_advanced.py -v --tb=short -m "not slow" \
-            --cov=src --cov-append --cov-report=xml 2>&1 | tail -20
+            --cov=src --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4

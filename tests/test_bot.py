@@ -132,7 +132,7 @@ class TestWordOverlap(unittest.TestCase):
 
 # ─── utils: is_similar_to_any ─────────────────────────────────────────────────
 
-class TestIsSimilarToAny(unittest.TestCase):
+class TestIsSimilarToAnyRussian(unittest.TestCase):
 
     def setUp(self):
         self.rewriter = _FakeRewriter()

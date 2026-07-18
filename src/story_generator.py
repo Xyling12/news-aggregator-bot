@@ -426,7 +426,9 @@ class StoryGenerator:
     ) -> Optional[bytes]:
         bg_color, label = self._CLEAN_STORY.get(rubric, self._CLEAN_STORY["fact"])
         photo = await self._download_image(photo_url) if photo_url else None
-        return self._render_clean_story(text, label, photo=photo, bg_color=bg_color)
+        return await asyncio.to_thread(
+            self._render_clean_story, text, label, photo=photo, bg_color=bg_color
+        )
 
     # ── Convenience wrappers (backward compat) ───────────────────────────
 
@@ -494,7 +496,9 @@ class StoryGenerator:
             texts = ["Котиков много не бывает", "Минутка позитива", "Обеденный котик"]
         else:
             texts = ["Доброе утро, Ижевск", "Всем хорошего дня", "Котиков много не бывает"]
-        return self._render_clean_story(random.choice(texts), label=None, photo=photo)
+        return await asyncio.to_thread(
+            self._render_clean_story, random.choice(texts), label=None, photo=photo
+        )
 
     async def generate_video_story(self, video_url: str, text: str, output_path: str = "story_temp.mp4", music_url: Optional[str] = None) -> Optional[str]:
         """
@@ -506,19 +510,24 @@ class StoryGenerator:
         import ffmpeg
         import os
         
+        input_mp4 = None
+        is_local = True
         try:
             # 1. Download source video or use local path
             is_local = os.path.exists(video_url)
             if is_local:
                 input_mp4 = video_url
             else:
-                input_mp4 = tempfile.mktemp(suffix=".mp4")
+                _tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                _tmp.close()
+                input_mp4 = _tmp.name
                 headers = {"User-Agent": "IzhevskTodayNewsBot/1.0"}
                 async with aiohttp.ClientSession(headers=headers) as session:
                     async with session.get(video_url, timeout=30) as resp:
                         if resp.status == 200:
                             with open(input_mp4, 'wb') as f:
-                                f.write(await resp.read())
+                                async for chunk in resp.content.iter_chunked(65536):
+                                    f.write(chunk)
                         else:
                             logger.error(f"Failed to download video: {resp.status}")
                             return None
@@ -580,19 +589,20 @@ class StoryGenerator:
                 None,
                 lambda: ffmpeg.run(_out, overwrite_output=True, capture_stdout=True, capture_stderr=True)
             )
-            
-            # Cleanup temp input if we downloaded it
-            try:
-                if not is_local:
-                    os.remove(input_mp4)
-            except:
-                pass
-                
             return output_path
-            
+
         except ffmpeg.Error as e:
             logger.error(f"FFmpeg error: {e.stderr.decode('utf-8')}")
             return None
         except Exception as e:
             logger.error(f"Video story generation failed: {e}")
             return None
+        finally:
+            # Cleanup temp input if we downloaded it — runs on every exit path
+            # (success, ffmpeg error, or any other exception).
+            if not is_local and input_mp4:
+                try:
+                    if os.path.exists(input_mp4):
+                        os.remove(input_mp4)
+                except OSError:
+                    pass

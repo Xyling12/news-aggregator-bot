@@ -17,6 +17,11 @@ from src.config import Config
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_MODEL_NAMES = [
+    # Gemini 3 family tried first — falls back automatically to 2.5/2.0 if a name
+    # isn't available on this key/quota (see _resolve_gemini_model_names, which
+    # validates every name against ListModels and silently drops unknown ones).
+    "gemini-3-flash",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-2.5-pro",
@@ -1122,7 +1127,7 @@ class AIRewriter:
         try:
             timeout = aiohttp.ClientTimeout(total=45)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload, headers=headers, ssl=False) as resp:
+                async with session.post(url, json=payload, headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         choices = data.get("choices", [])

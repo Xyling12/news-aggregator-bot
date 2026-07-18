@@ -2040,7 +2040,9 @@ async def process_new_post(post_id: int):
 
             if post["media_type"] in ("photo", "video") and post.get("media_local_path") and _config.use_source_media:
                 # Best-effort detector in addition to DB watermark flag.
-                detected, confidence = _media_processor.detect_watermark(post["media_local_path"])
+                detected, confidence = await asyncio.to_thread(
+                    _media_processor.detect_watermark, post["media_local_path"]
+                )
                 if detected and confidence >= 0.25:
                     has_original_clean = False
                     logger.info(
@@ -2095,7 +2097,9 @@ async def process_new_post(post_id: int):
                     try:
                         from src.card_maker import make_news_card
                         card_path = os.path.join(_config.media_dir, f"card_{post_id}.jpg")
-                        make_news_card(rewritten or original_text, cat_label, cat_color, card_path)
+                        await asyncio.to_thread(
+                            make_news_card, rewritten or original_text, cat_label, cat_color, card_path
+                        )
                         await _db.set_local_media_override(post_id, card_path)
                         logger.info(f"Post #{post_id}: branded card ({cat_label}) — no local photo source")
                     except Exception as ce:
