@@ -84,6 +84,12 @@ class Config:
     yt_clips_per_day: int = 3
     yt_clips_slots: List[int] = field(default_factory=lambda: [9, 14, 19])  # morning/noon/evening (Izhevsk)
 
+    # Re-upload a news post's source video ALSO as a standalone VK Clip.
+    # OFF by default: the video is already attached to the wall post, and VK lists
+    # vertical community videos under Клипы too — so uploading it a second time as
+    # a clip produced visible duplicate clips (same flood/truck video twice).
+    src_video_clips_enabled: bool = False
+
     # Optional: MAX crossposting
     max_bot_token: str = ""
     max_chat_id: str = ""
@@ -218,6 +224,7 @@ class Config:
                 3, min(20, int(os.getenv("VK_COMPETITOR_SCAN_LIMIT", "6")))
             ),
             yt_clips_enabled=_env_bool("YT_CLIPS_ENABLED", False),
+            src_video_clips_enabled=_env_bool("SRC_VIDEO_CLIPS_ENABLED", False),
             yt_clips_channels=_split_csv("YT_CLIPS_CHANNELS") or [
                 "UC-JcbSvFEBYohaXn0PsY0gQ",  # Проект Ижевск (городской транспорт/жизнь)
                 "UCEH8ygAMkIT4ydp8hd9kNJQ",  # ИА Сусанин (Удмуртия в минуту)

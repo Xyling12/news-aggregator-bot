@@ -1658,8 +1658,11 @@ async def _publish_post(post: dict) -> bool:
                     pass
 
                 # Repost the source VIDEO to VK Clips — fresh, local, current content
-                # (skip accidents/tragedies; cap a few per day).
-                if is_video_file and media_path:
+                # (skip accidents/tragedies; cap a few per day). OFF by default:
+                # the video is already on the wall post, and VK also lists vertical
+                # community videos under Клипы, so this second upload created visible
+                # duplicate clips. Enable with SRC_VIDEO_CLIPS_ENABLED=true if wanted.
+                if _config.src_video_clips_enabled and is_video_file and media_path:
                     try:
                         _vt = re.sub(r'<[^>]+>', '', text).lower()
                         _vcat = _detect_news_category(_vt)[0]
