@@ -1369,6 +1369,37 @@ def _detect_news_category(text: str):
     return _DEFAULT_CATEGORY
 
 
+def _rank_stock_candidates(candidates: list, keywords: list) -> list:
+    """Re-rank stock photos so the most on-topic one is picked, not a random one.
+
+    Pexels/Pixabay already return results sorted by relevance, but each photo's
+    own alt/description text is a free extra signal (no API cost): for a query
+    "court justice judge" a photo described "judge gavel courtroom" should beat
+    one that only matched the keyword loosely. We score by how many query tokens
+    appear in the description, keeping the source API's order as the tiebreaker
+    (Python's sort is stable), and lightly shuffle within the top score tier so
+    posts with identical fixed keywords don't always grab the very same shot.
+    """
+    kw_tokens = set()
+    for kw in keywords:
+        kw_tokens.update(w for w in re.findall(r"[a-zа-яё]+", kw.lower()) if len(w) > 2)
+
+    def _score(item) -> int:
+        desc = (item.get("description") or "").lower()
+        desc_tokens = set(re.findall(r"[a-zа-яё]+", desc))
+        return len(kw_tokens & desc_tokens)
+
+    scored = sorted(candidates, key=_score, reverse=True)  # stable → API order kept on ties
+    if len(scored) > 1:
+        top = _score(scored[0])
+        # Shuffle only the best-scoring block; leave weaker matches after it.
+        head = [c for c in scored if _score(c) == top]
+        tail = [c for c in scored if _score(c) != top]
+        random.shuffle(head)
+        scored = head + tail
+    return scored
+
+
 def _is_air_raid(text: str) -> bool:
     """True if the text is about an air-raid/danger subject (rocket/sky/drone/siren).
     Used to force instant publishing — these can't wait in the queue."""
@@ -2068,12 +2099,13 @@ async def process_new_post(post_id: int):
                     if keywords and len(keywords) >= 1:
                         stock_photos = await _media_processor.search_stock_photo(keywords, count=12)
                         if stock_photos:
-                            # Shuffle so we don't always publish the same top result
-                            # (the fixed keywords otherwise returned one identical photo).
-                            random.shuffle(stock_photos)
+                            # Rank by description match (most on-topic first) instead
+                            # of picking a random result — keeps variety via the
+                            # top-tier shuffle inside _rank_stock_candidates + dedup.
+                            ranked = _rank_stock_candidates(stock_photos, keywords)
                             async with _used_stock_urls_lock:
                                 chosen = None
-                                for candidate in stock_photos:
+                                for candidate in ranked:
                                     url = candidate.get("url", "")
                                     if url and url not in _used_stock_urls:
                                         chosen = candidate
@@ -2082,7 +2114,7 @@ async def process_new_post(post_id: int):
                                             _used_stock_urls.pop()
                                         break
                                 if not chosen:
-                                    chosen = stock_photos[0]
+                                    chosen = ranked[0]
                             stock_url = chosen["url"]
                             logger.info(
                                 f"Post #{post_id}: stock photo ({cat_label}) from "

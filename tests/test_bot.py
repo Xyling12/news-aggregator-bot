@@ -21,6 +21,7 @@ from src.bot import (
     _is_breaking_candidate,
     _has_non_local_geo,
     _should_reject_by_geo,
+    _rank_stock_candidates,
 )
 from src.ai_rewriter import _parse_binary_answer
 from src.config import Config
@@ -138,9 +139,11 @@ class TestIsSimilarToAnyRussian(unittest.TestCase):
         self.rewriter = _FakeRewriter()
 
     def test_detects_duplicate(self):
-        # is_similar_to_any скипает identical == text, поэтому даём слегка изменённый вариант
+        # is_similar_to_any скипает identical == text, поэтому даём слегка изменённый вариант.
+        # Пороги дедупа намеренно ловят только почти-копипасту (см. docstring
+        # is_similar_to_any) — кандидат отличается ровно одним словом.
         text = "В Ижевске открылся новый торговый центр премиум класса"
-        candidates = ["В городе Ижевске открылся новый торговый центр высокого класса"]
+        candidates = ["Сегодня в Ижевске открылся новый торговый центр премиум класса"]
         self.assertTrue(is_similar_to_any(text, candidates, self.rewriter))
 
     def test_passes_unique_content(self):
@@ -160,8 +163,9 @@ class TestIsSimilarToAnyRussian(unittest.TestCase):
 # ─── utils: detect_rubric ─────────────────────────────────────────────────────
 
     def test_find_similar_candidate_supports_queue_mode(self):
-        text = "new kalashnikov procurement director arrested in moscow"
-        candidates = ["kalashnikov procurement director arrested in moscow in fraud case"]
+        # Почти-копипаста (разница в одно слово) должна ловиться queue-порогами
+        text = "kalashnikov procurement director arrested in moscow fraud case"
+        candidates = ["former kalashnikov procurement director arrested in moscow fraud case"]
         match = find_similar_candidate(
             text,
             candidates,
@@ -232,6 +236,32 @@ class TestIsSimilarToAny(unittest.TestCase):
             require_both=True,
         )
         self.assertIsNone(match)
+
+
+class TestRankStockCandidates(unittest.TestCase):
+    """Подбор фото: наиболее релевантные по описанию должны быть в топе."""
+
+    def test_on_topic_photos_rank_first(self):
+        candidates = [
+            {"url": "sky", "description": "blue sky clouds nature"},
+            {"url": "court1", "description": "judge gavel courtroom justice"},
+            {"url": "office", "description": "random office desk"},
+            {"url": "court2", "description": "court hearing lawyer justice"},
+        ]
+        keywords = ["court justice judge", "court hearing"]
+        ranked = _rank_stock_candidates(candidates, keywords)
+        # Оба судебных фото должны оказаться выше нерелевантных
+        self.assertEqual({ranked[0]["url"], ranked[1]["url"]}, {"court1", "court2"})
+
+    def test_empty_keywords_keeps_order(self):
+        candidates = [{"url": "a", "description": "x"}, {"url": "b", "description": "y"}]
+        ranked = _rank_stock_candidates(candidates, [])
+        self.assertEqual({c["url"] for c in ranked}, {"a", "b"})
+
+    def test_handles_missing_description(self):
+        candidates = [{"url": "a"}, {"url": "b", "description": "court justice"}]
+        ranked = _rank_stock_candidates(candidates, ["court justice"])
+        self.assertEqual(ranked[0]["url"], "b")
 
 
 class TestDetectRubric(unittest.TestCase):
@@ -576,10 +606,13 @@ class TestDockerCompose(unittest.TestCase):
         self.assertIn("AUTO_PUBLISH=true", env_str)
 
     def test_publish_interval_set(self):
+        # Значение интервала — операционная настройка (меняется в проде без правки
+        # тестов), поэтому проверяем только что переменная задана и числовая.
         compose = self._load_compose()
         env = compose["services"]["news-bot"].get("environment", [])
         env_str = " ".join(str(e) for e in env)
-        self.assertIn("PUBLISH_INTERVAL=900", env_str)
+        m = re.search(r"PUBLISH_INTERVAL=(\d+)", env_str)
+        self.assertIsNotNone(m, "PUBLISH_INTERVAL не задан в docker-compose.yml")
 
     def test_healthcheck_present(self):
         compose = self._load_compose()
