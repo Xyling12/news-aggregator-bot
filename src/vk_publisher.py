@@ -44,7 +44,8 @@ class VKPublisher:
         (("больниц", "поликлиник", "медици", "врач"), ["#Здоровье", "#Медицина"]),
         (("спорт", "матч", "турнир", "чемпион"), ["#Спорт"]),
         (("погод", "мороз", "снег", "дожд"), ["#Погода"]),
-        (("работ", "зарплат", "бизнес", "налог", "цен"), ["#Экономика", "#Работа"]),
+        # NB: "цена"/"ценам" (не "цен" — иначе ловит «центр»)
+        (("работ", "зарплат", "бизнес", "налог", "цена", "цены", "ценам", "подорожа"), ["#Экономика", "#Работа"]),
         (("концерт", "театр", "фестивал", "выставк"), ["#Культура", "#Афиша"]),
     ]
     COMMENT_TOPIC_RULES = [
@@ -167,7 +168,9 @@ class VKPublisher:
 
         text_wo_tags = re.sub(r"(?<!\w)#[A-Za-zА-Яа-яЁё0-9_]+", " ", text.lower())
         for keywords, seo_tags in self.SEO_TOPIC_RULES:
-            if any(kw in text_wo_tags for kw in keywords):
+            # Match at WORD START only — plain substring matching mistagged
+            # «паспортов» → #Спорт and «центре» → #Экономика.
+            if any(re.search(r"\b" + re.escape(kw), text_wo_tags) for kw in keywords):
                 for tag in seo_tags:
                     add_tag(tag)
 

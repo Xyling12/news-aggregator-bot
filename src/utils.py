@@ -354,8 +354,9 @@ def format_post(text: str, hashtags: list) -> str:
     """
     # Convert **bold** markdown → <b>bold</b> HTML
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-    # Remove leftover markdown headers
-    text = re.sub(r'^#{1,3}\s*', '', text, flags=re.MULTILINE)
+    # Remove leftover markdown headers — only '# Title' (hash + whitespace);
+    # '\s*' would also strip the first '#' off hashtag lines like '#погода #ижевск'
+    text = re.sub(r'^#{1,3}\s+', '', text, flags=re.MULTILINE)
 
     lines = text.strip().split("\n")
     if not lines:

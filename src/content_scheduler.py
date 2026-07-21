@@ -582,7 +582,7 @@ class ContentScheduler:
             # `code` → <code>code</code>
             t = _re.sub(r'`(.+?)`', r'<code>\1</code>', t)
             # Remove bare # headers (just strip the #)
-            t = _re.sub(r'^#{1,3}\s*', '', t, flags=_re.MULTILINE)
+            t = _re.sub(r'^#{1,3}\s+', '', t, flags=_re.MULTILINE)  # markdown headers only; keep '#хэштег' lines
             return t
 
         text = _md_to_html(text)

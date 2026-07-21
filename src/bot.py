@@ -1364,7 +1364,9 @@ def _detect_news_category(text: str):
     # (a moon post tagged #спорт was mislabelled "СПОРТ").
     t = re.sub(r"#\S+", " ", (text or "").lower())
     for triggers, cat in _NEWS_CATEGORIES:
-        if any(k in t for k in triggers):
+        # Word-start matching: plain substring hit «спорт» inside «паспортов»
+        # and «цен» inside «центре», mislabelling categories.
+        if any(re.search(r"\b" + re.escape(k), t) for k in triggers):
             return cat
     return _DEFAULT_CATEGORY
 

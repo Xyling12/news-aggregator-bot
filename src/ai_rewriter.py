@@ -808,7 +808,7 @@ class AIRewriter:
                 max_tokens=2048,
             )
             if text and len(text) > 20:
-                text = _re.sub(r'^#{1,3}\s*', '', text, flags=_re.MULTILINE)
+                text = _re.sub(r'^#{1,3}\s+', '', text, flags=_re.MULTILINE)  # markdown headers only ('# Title'); '#хэштег' must survive
                 text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
                 logger.info(f"ask_ai: AITUNNEL OK ({len(text)} chars)")
                 return text
@@ -833,7 +833,7 @@ class AIRewriter:
                         )
                         if response and response.text:
                             text = response.text.strip()
-                            text = _re.sub(r'^#{1,3}\s*', '', text, flags=_re.MULTILINE)
+                            text = _re.sub(r'^#{1,3}\s+', '', text, flags=_re.MULTILINE)  # markdown headers only ('# Title'); '#хэштег' must survive
                             text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
                             logger.info(f"ask_ai: Gemini/{_name} OK ({len(text)} chars)")
                             return text
